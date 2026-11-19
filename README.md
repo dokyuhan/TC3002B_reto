@@ -25,6 +25,15 @@ todo: architecture
 
 ## Quickstart
 
-If you run the application locally, follow these steps:
+Prerequisites: Python 3.12 and `uv`.
 
-todo: steps
+```bash
+# Install locked dependencies into .venv
+uv sync --locked
+
+# Run linter
+uv run ruff check --select E4,E7,E9,F .
+
+# Run unit tests
+uv run pytest
+```
