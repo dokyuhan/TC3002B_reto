@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from src.features.markov import clean_sequence, pair_to_tensor
-from src.preprocessing.normalizer import DEFAULT_AST_STATES, NUM_STATES, PAD_TOKEN
+from src.vocabulary import DEFAULT_AST_STATES, NUM_STATES, PAD_TOKEN
 
 SPLITS: tuple[str, ...] = ("train", "val", "test")
 
@@ -99,6 +99,7 @@ def run_pipeline(
     smoothing_alpha: float = 0.0,
     drop_degenerate: bool = False,
     augment_symmetry_train: bool = False,
+    splits: tuple[str, ...] = SPLITS,
 ) -> dict[str, tuple[int, ...]]:
     """Transform preprocessed splits into Markov tensor archives and return output shapes."""
     payload: dict[str, np.ndarray] = {}
@@ -113,7 +114,7 @@ def run_pipeline(
             else np.asarray(DEFAULT_AST_STATES[:num_states])
         )
 
-        for split in SPLITS:
+        for split in splits:
             seqs_a, seqs_b, y = _extract_split_pairs(data, split)
             X_split, y_split = build_split_tensors(
                 seqs_a,
@@ -136,3 +137,50 @@ def run_pipeline(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output_path, **payload)
     return summary
+
+
+def build_diagnostic_tensors(
+    input_path: Path,
+    output_path: Path | None = None,
+    split: str = "diagnostic",
+    num_states: int = NUM_STATES,
+    pad_token: int = PAD_TOKEN,
+    smoothing_alpha: float = 0.0,
+    drop_degenerate: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Extract Markov tensors for a single diagnostic split and optionally save to .npz."""
+    with np.load(input_path, allow_pickle=False) as data:
+        if "num_states" in data:
+            num_states = int(data["num_states"])
+        state_names = (
+            data["state_names"]
+            if "state_names" in data
+            else np.asarray(DEFAULT_AST_STATES[:num_states])
+        )
+        seqs_a, seqs_b, y = _extract_split_pairs(data, split)
+
+    X_diag, y_diag = build_split_tensors(
+        seqs_a,
+        seqs_b,
+        y,
+        num_states=num_states,
+        pad_token=pad_token,
+        smoothing_alpha=smoothing_alpha,
+        drop_degenerate=drop_degenerate,
+        augment_symmetry=False,
+    )
+
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            output_path,
+            **{
+                f"X_{split}": X_diag,
+                f"y_{split}": y_diag,
+                "num_states": np.asarray(num_states, dtype=np.int32),
+                "smoothing_alpha": np.asarray(smoothing_alpha, dtype=np.float32),
+                "state_names": state_names,
+            },
+        )
+
+    return X_diag, y_diag
