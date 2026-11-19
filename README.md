@@ -14,7 +14,7 @@ Phase 1 delivers pairwise Java source code plagiarism detection backed by Tree S
 
 The pipeline parses source code via Tree Sitter into 12 state AST sequences, builds `(3, 12, 12)` 1st order Markov transition tensors alongside character n gram TF IDF baselines, scores pairs with a calibrated symmetric LightGBM classifier, exposes predictions over FastAPI, and visualizes comparisons in Streamlit.
 
-[Architecture Diagram](docs/architecture.png) | [Mermaid Source](docs/architecture.mmd)
+[Architecture Diagram](docs/architecture.mmd)
 
 ## Structure
 
