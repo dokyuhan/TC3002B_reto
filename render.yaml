@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: tc3002b-plagiarism-detector
+    name: tc3002b-reto
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
