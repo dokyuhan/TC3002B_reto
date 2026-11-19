@@ -58,3 +58,6 @@ data/raw/
 .gemini/
 .agent/
 .aider*
+
+# Local Context (unshared)
+.context/
