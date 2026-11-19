@@ -84,6 +84,7 @@ def build_split_tensors(
     y_out = np.asarray(labels, dtype=np.uint8)
 
     if augment_symmetry:
+        # Channel 2 (|P_A - P_B|) is order-invariant, so only P_A and P_B swap.
         X = np.concatenate([X, X[:, [1, 0, 2], :, :]], axis=0)
         y_out = np.concatenate([y_out, y_out], axis=0)
 
