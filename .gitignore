@@ -44,7 +44,7 @@ pnpm-debug.log*
 # Docker & Logs
 *.log
 
-# Data, Tensors & Model Artifacts (binarios del Paso 1, 2 y 3)
+# Data, Tensors & Model Artifacts
 data/raw/
 data/interim/
 data/processed/

@@ -45,6 +45,7 @@ def sequence_to_transition_matrix(
         counts += smoothing_alpha
 
     row_sums = counts.sum(axis=1, keepdims=True)
+    # Leave rows with zero outgoing transitions as 0.0 when smoothing_alpha == 0.0.
     matrix = np.divide(counts, row_sums, out=np.zeros_like(counts), where=row_sums > 0.0)
     return matrix.astype(np.float32)
 
