@@ -1,25 +1,25 @@
 flowchart TD
     subgraph Ingestion
-        A1["Source Code"] --> B1["Tree Sitter AST Parser"]
-        B1 --> C1["Token Normalizer"]
+        A1["Source Code Pair"] --> B1["Boilerplate And Whitespace Normalizer"]
+        B1 --> C1["Tree Sitter AST Parser"]
+        C1 --> D1["12 State Sequence Mapper"]
     end
 
     subgraph FeaturePipeline["Feature Extraction"]
-        C1 --> D1["AST N Gram Extractor"]
-        C1 --> D2["Markov Transition Matrix Calculator"]
-        D1 --> E1["Binary NPZ Archive Cache"]
-        D2 --> E1
+        D1 --> E1["1st Order Markov Transition Tensor"]
+        B1 --> E2["Character N Gram TF IDF Baseline"]
+        E1 --> F1["Binary NPZ And Parquet Cache"]
     end
 
     subgraph ModelingEngine["Modeling"]
-        E1 --> F1["Markov Transitions Probability"]
-        E1 --> F2["TF IDF Similarity"]
-        E1 --> F3["LightGBM Classifier"]
+        F1 --> G1["Symmetric Markov Distance Metrics"]
+        F1 --> G2["Calibrated Symmetric LightGBM Classifier"]
+        E2 --> G3["TF IDF Cosine Baseline"]
     end
 
     subgraph ServiceLayer["Presentation"]
-        F1 --> G1["FastAPI Application"]
-        F2 --> G1
-        F3 --> G1
-        G1 --> H1["Streamlit Dashboard"]
+        G1 --> H1["FastAPI Inference Service"]
+        G2 --> H1
+        G3 --> H1
+        H1 --> I1["Streamlit Interactive Dashboard"]
     end
