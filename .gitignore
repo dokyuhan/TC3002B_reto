@@ -41,10 +41,10 @@ npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
 
-# Docker
+# Docker & Logs
 *.log
 
-# Data
+# Data, Tensors & Model Artifacts (binarios del Paso 1, 2 y 3)
 data/raw/
 data/interim/
 data/processed/
