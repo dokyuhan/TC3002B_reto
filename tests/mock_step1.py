@@ -1,4 +1,4 @@
-"""Generador sintético del entregable del Paso 1 para desarrollo en paralelo."""
+"""Generador sintético del entregable de preprocesamiento para desarrollo y pruebas."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 import numpy as np
 
-from .schema import DEFAULT_AST_STATES, NUM_STATES, PAD_TOKEN
+from src.preprocessing.normalizer import DEFAULT_AST_STATES, NUM_STATES, PAD_TOKEN
 
 
 def _sample_markov_sequence(
@@ -132,7 +132,7 @@ def generate_mock_dataset(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Genera un .npz mock del Paso 1")
+    parser = argparse.ArgumentParser(description="Genera un .npz mock de preprocesamiento")
     parser.add_argument("--output", type=Path, default=Path("data/mock_step1.npz"))
     parser.add_argument("--format", choices=("padded", "offsets"), default="offsets")
     parser.add_argument("--num-states", type=int, default=NUM_STATES)

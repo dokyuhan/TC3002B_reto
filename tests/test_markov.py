@@ -1,12 +1,12 @@
-"""Pruebas unitarias y de contrato para el Paso 2."""
+"""Pruebas unitarias y de contrato para Markov y extracción de features."""
 
 from pathlib import Path
 import numpy as np
 import pytest
 
-from src.step2.markov import pair_to_tensor, sequence_to_transition_matrix
-from src.step2.mock_step1 import generate_mock_dataset
-from src.step2.pipeline import run_pipeline, validate_tensor_batch
+from src.features.extraction import run_pipeline, validate_tensor_batch
+from src.features.markov import pair_to_tensor, sequence_to_transition_matrix
+from tests.mock_step1 import generate_mock_dataset
 
 
 def test_exact_transition_matrix_and_padding():

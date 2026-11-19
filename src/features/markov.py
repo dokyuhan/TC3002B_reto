@@ -1,0 +1,87 @@
+"""Cálculo de matrices de transición de Markov y tensores de comparación."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+import numpy as np
+
+from src.preprocessing.normalizer import NUM_STATES, PAD_TOKEN
+
+
+def clean_sequence(
+    seq: Sequence[int] | np.ndarray,
+    num_states: int = NUM_STATES,
+    pad_token: int = PAD_TOKEN,
+) -> np.ndarray:
+    """Convierte a array 1D de enteros, elimina padding y valida el rango [0, K-1]."""
+    arr = np.asarray(seq, dtype=np.int64).ravel()
+    arr = arr[arr != pad_token]
+
+    if arr.size > 0 and (arr.min() < 0 or arr.max() >= num_states):
+        raise ValueError(
+            f"IDs de estado fuera de rango [0, {num_states - 1}]: "
+            f"min={arr.min()}, max={arr.max()}"
+        )
+    return arr
+
+
+def sequence_to_transition_matrix(
+    seq: Sequence[int] | np.ndarray,
+    num_states: int = NUM_STATES,
+    pad_token: int = PAD_TOKEN,
+    smoothing_alpha: float = 0.0,
+) -> np.ndarray:
+    """Construye la matriz de transición P de tamaño (K, K) en float32.
+
+    Parámetros:
+        smoothing_alpha:
+            - 0.0: las filas sin transiciones salientes permanecen en 0.0.
+            - >0.0: aplica suavizado de Laplace, garantizando filas que suman 1.0.
+    """
+    if smoothing_alpha < 0.0:
+        raise ValueError(f"smoothing_alpha debe ser >= 0.0, recibido: {smoothing_alpha}")
+
+    arr = clean_sequence(seq, num_states=num_states, pad_token=pad_token)
+    counts = np.zeros((num_states, num_states), dtype=np.float64)
+
+    if arr.size >= 2:
+        np.add.at(counts, (arr[:-1], arr[1:]), 1.0)
+
+    if smoothing_alpha > 0.0:
+        counts += smoothing_alpha
+        row_sums = counts.sum(axis=1, keepdims=True)
+        matrix = counts / row_sums
+    else:
+        row_sums = counts.sum(axis=1, keepdims=True)
+        matrix = np.divide(
+            counts,
+            row_sums,
+            out=np.zeros_like(counts),
+            where=row_sums > 0.0,
+        )
+
+    return matrix.astype(np.float32)
+
+
+def pair_to_tensor(
+    seq_a: Sequence[int] | np.ndarray,
+    seq_b: Sequence[int] | np.ndarray,
+    num_states: int = NUM_STATES,
+    pad_token: int = PAD_TOKEN,
+    smoothing_alpha: float = 0.0,
+) -> np.ndarray:
+    """Genera el tensor (3, K, K) con canales [P_A, P_B, |P_A - P_B|]."""
+    p_a = sequence_to_transition_matrix(
+        seq_a,
+        num_states=num_states,
+        pad_token=pad_token,
+        smoothing_alpha=smoothing_alpha,
+    )
+    p_b = sequence_to_transition_matrix(
+        seq_b,
+        num_states=num_states,
+        pad_token=pad_token,
+        smoothing_alpha=smoothing_alpha,
+    )
+    diff = np.abs(p_a - p_b)
+    return np.stack([p_a, p_b, diff], axis=0).astype(np.float32)
