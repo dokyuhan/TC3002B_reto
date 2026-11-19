@@ -58,7 +58,9 @@ data/processed/
 *.onnx
 *.pkl
 *.joblib
+!models/*.joblib
 *.parquet
+artifacts/
 checkpoints/
 runs/
 mlruns/
