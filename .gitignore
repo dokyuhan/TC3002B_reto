@@ -5,6 +5,8 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+*.save
+*~
 
 # Environment & Secrets
 .env
@@ -21,6 +23,8 @@ env/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+htmlcov/
 *.egg-info/
 dist/
 build/
@@ -37,11 +41,16 @@ npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
 
-# Docker
+# Docker & Logs
 *.log
 
-# Data & Model Artifacts (keep large binaries out of git)
+# Data, Tensors & Model Artifacts (binarios del Paso 1, 2 y 3)
 data/raw/
+data/interim/
+data/processed/
+*.npz
+*.npy
+*.zarr/
 *.h5
 *.keras
 *.pt
@@ -50,6 +59,10 @@ data/raw/
 *.pkl
 *.joblib
 *.parquet
+checkpoints/
+runs/
+mlruns/
+wandb/
 
 # AI-Driven Development
 .claude/
