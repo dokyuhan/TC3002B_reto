@@ -20,7 +20,7 @@ todo: architecture diagram
 
 The repository organizes modules by technical responsibility:
 
-
+todo: architecture
 
 ## Quickstart
 
