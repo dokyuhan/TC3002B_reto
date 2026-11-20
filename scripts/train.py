@@ -45,16 +45,55 @@ class PreparedDataset:
     levels: list[str]
 
 
+def _load_cached_sequences(
+    manifest_path: Path,
+) -> dict[str, tuple[np.ndarray, np.ndarray]] | None:
+    """Load precomputed AST state sequences from the sibling .npz cache if present."""
+    if not manifest_path.name.endswith("_manifest.parquet"):
+        return None
+    cache_path = manifest_path.with_name(
+        manifest_path.name.replace("_manifest.parquet", "_sequences.npz")
+    )
+    if not cache_path.is_file():
+        return None
+
+    cached: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    with np.load(cache_path, allow_pickle=False) as archive:
+        splits = [
+            key[: -len("_pair_ids")]
+            for key in archive.files
+            if key.endswith("_pair_ids")
+        ]
+        for split in splits:
+            pair_ids = archive[f"{split}_pair_ids"]
+            tok_a = archive[f"{split}_tokens_a"]
+            off_a = archive[f"{split}_offsets_a"]
+            tok_b = archive[f"{split}_tokens_b"]
+            off_b = archive[f"{split}_offsets_b"]
+            for idx, pid in enumerate(pair_ids):
+                cached[str(pid)] = (
+                    tok_a[off_a[idx] : off_a[idx + 1]],
+                    tok_b[off_b[idx] : off_b[idx + 1]],
+                )
+    return cached
+
+
 def prepare_manifest_dataset(
     manifest_path: Path,
     language: str = "java",
     strip_boilerplate: bool = True,
     smoothing_alpha: float = DEFAULT_SMOOTHING_ALPHA,
 ) -> PreparedDataset:
-    """Parse a parquet manifest into (N, 3, K, K) tensors, perplexities, and normalized texts."""
+    """Load a manifest into (N, 3, K, K) tensors, perplexities, and normalized texts.
+
+    Reuses the sibling offset packed *_sequences.npz AST cache when strip_boilerplate
+    is True and the cache exists, falling back to live Tree Sitter parsing otherwise.
+    """
     df = pl.read_parquet(manifest_path)
+    pair_ids = [str(pid) for pid in df["pair_id"].to_list()]
     codes_a_raw = df["code_a"].to_list()
     codes_b_raw = df["code_b"].to_list()
+    cached_seqs = _load_cached_sequences(manifest_path) if strip_boilerplate else None
 
     tensors: list[np.ndarray] = []
     perp_a_list: list[float] = []
@@ -62,34 +101,38 @@ def prepare_manifest_dataset(
     norm_a_list: list[str] = []
     norm_b_list: list[str] = []
 
-    for code_a, code_b in zip(codes_a_raw, codes_b_raw):
+    for pid, code_a, code_b in zip(pair_ids, codes_a_raw, codes_b_raw):
         norm_a = normalize_source(code_a, language=language, strip_boilerplate=strip_boilerplate)
         norm_b = normalize_source(code_b, language=language, strip_boilerplate=strip_boilerplate)
         norm_a_list.append(norm_a)
         norm_b_list.append(norm_b)
 
-        res_a = parse_to_state_sequence(
-            code_a,
-            language=language,
-            strip_boilerplate=strip_boilerplate,
-        )
-        res_b = parse_to_state_sequence(
-            code_b,
-            language=language,
-            strip_boilerplate=strip_boilerplate,
-        )
+        if cached_seqs is not None and pid in cached_seqs:
+            states_a, states_b = cached_seqs[pid]
+        else:
+            states_a = parse_to_state_sequence(
+                code_a,
+                language=language,
+                strip_boilerplate=strip_boilerplate,
+            ).states
+            states_b = parse_to_state_sequence(
+                code_b,
+                language=language,
+                strip_boilerplate=strip_boilerplate,
+            ).states
+
         tensor = pair_to_tensor(
-            res_a.states,
-            res_b.states,
+            states_a,
+            states_b,
             num_states=NUM_STATES,
             smoothing_alpha=smoothing_alpha,
         )
         tensors.append(tensor)
         perp_a_list.append(
-            transition_perplexity(res_a.states, tensor[0], smoothing_alpha=smoothing_alpha)
+            transition_perplexity(states_a, tensor[0], smoothing_alpha=smoothing_alpha)
         )
         perp_b_list.append(
-            transition_perplexity(res_b.states, tensor[1], smoothing_alpha=smoothing_alpha)
+            transition_perplexity(states_b, tensor[1], smoothing_alpha=smoothing_alpha)
         )
 
     X = np.stack(tensors, axis=0).astype(np.float32)

@@ -47,3 +47,9 @@ Install Python 3.12 and `uv` on your local machine before you start. Run all com
    ```bash
    uv run pytest
    ```
+
+4. Run the full offline pipeline from raw data to evaluation charts:
+
+   ```bash
+   uv run python -m scripts.run_pipeline
+   ```
