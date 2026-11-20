@@ -1,0 +1,15 @@
+.git/
+.venv/
+data/raw/
+data/processed/
+dataset/
+artifacts/
+.context/
+.pytest_cache/
+.ruff_cache/
+*.zip
+*.rar
+__pycache__/
+**/__pycache__/
+*.pyc
+**/*.pyc
