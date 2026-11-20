@@ -47,8 +47,8 @@ pnpm-debug.log*
 # Data, Tensors & Model Artifacts
 data/raw/
 data/interim/
-data/processed/
 *.npz
+!data/processed/*.npz
 *.npy
 *.zarr/
 *.h5
@@ -60,6 +60,7 @@ data/processed/
 *.joblib
 !models/*.joblib
 *.parquet
+!data/processed/*.parquet
 artifacts/
 checkpoints/
 runs/
