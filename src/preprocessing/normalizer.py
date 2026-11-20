@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from src.vocabulary import (
+from src.preprocessing.vocabulary import (
     DEFAULT_AST_STATES,
     NUM_STATES,
     PAD_TOKEN,
