@@ -334,11 +334,14 @@ def _init_session_state() -> None:
         st.session_state["last_analysis_key"] = None
     if "last_error" not in st.session_state:
         st.session_state["last_error"] = None
+    if "code_inputs_expanded" not in st.session_state:
+        st.session_state["code_inputs_expanded"] = False
 
 
 def _on_source_change() -> None:
     """Sync Code A and Code B when the user changes the Source selector."""
     selected = st.session_state["source_selector"]
+    st.session_state["code_inputs_expanded"] = selected == MANUAL_SOURCE_LABEL
     if selected in DEMO_SAMPLES:
         sample = DEMO_SAMPLES[selected]
         st.session_state["code_a"] = sample["code_a"]
@@ -356,6 +359,7 @@ def _on_source_change() -> None:
 
 def _on_code_edit() -> None:
     """Switch Source to Manual Input when edited text diverges from loaded content."""
+    st.session_state["code_inputs_expanded"] = True
     if st.session_state["source_selector"] == MANUAL_SOURCE_LABEL:
         return
 
@@ -653,23 +657,30 @@ def main() -> None:
 
     st.title("Code Plagiarism Detector")
 
-    editor_col_a, editor_col_b = st.columns(2)
-    with editor_col_a:
-        code_a = st.text_area(
-            "Code A",
-            key="code_a",
-            height=340,
-            on_change=_on_code_edit,
-        )
-        hint_slot_a = st.empty()
-    with editor_col_b:
-        code_b = st.text_area(
-            "Code B",
-            key="code_b",
-            height=340,
-            on_change=_on_code_edit,
-        )
-        hint_slot_b = st.empty()
+    code_inputs_expander = st.expander(
+        "Code Inputs",
+        expanded=False,
+        key="code_inputs_expanded",
+        on_change="rerun",
+    )
+    with code_inputs_expander:
+        editor_col_a, editor_col_b = st.columns(2)
+        with editor_col_a:
+            code_a = st.text_area(
+                "Code A",
+                key="code_a",
+                height=340,
+                on_change=_on_code_edit,
+            )
+            hint_slot_a = st.empty()
+        with editor_col_b:
+            code_b = st.text_area(
+                "Code B",
+                key="code_b",
+                height=340,
+                on_change=_on_code_edit,
+            )
+            hint_slot_b = st.empty()
 
     _run_analysis_if_ready(
         code_a=code_a,
@@ -682,19 +693,30 @@ def main() -> None:
     saved = st.session_state.get("last_result")
     last_error = st.session_state.get("last_error")
 
+    hint_a: str | None = None
     if has_b and not has_a:
-        with hint_slot_a:
-            _render_inline_hint("Add code to Code A to run the comparison.", tone="amber")
+        hint_a = "Add code to Code A to run the comparison."
     elif saved is not None and bool(saved["result"].get("parse_warnings_a", False)):
-        with hint_slot_a:
-            _render_inline_hint("Syntax error found. Partial tree used.", tone="amber")
+        hint_a = "Syntax error found. Partial tree used."
 
+    hint_b: str | None = None
     if has_a and not has_b:
-        with hint_slot_b:
-            _render_inline_hint("Add code to Code B to run the comparison.", tone="amber")
+        hint_b = "Add code to Code B to run the comparison."
     elif saved is not None and bool(saved["result"].get("parse_warnings_b", False)):
-        with hint_slot_b:
-            _render_inline_hint("Syntax error found. Partial tree used.", tone="amber")
+        hint_b = "Syntax error found. Partial tree used."
+
+    if code_inputs_expander.open:
+        if hint_a is not None:
+            with hint_slot_a:
+                _render_inline_hint(hint_a, tone="amber")
+        if hint_b is not None:
+            with hint_slot_b:
+                _render_inline_hint(hint_b, tone="amber")
+    else:
+        if hint_a is not None:
+            _render_inline_hint(f"Code A: {hint_a}", tone="amber")
+        if hint_b is not None:
+            _render_inline_hint(f"Code B: {hint_b}", tone="amber")
 
     if last_error is not None:
         status_code, error_detail = last_error
