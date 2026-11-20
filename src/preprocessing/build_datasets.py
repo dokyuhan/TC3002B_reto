@@ -9,12 +9,12 @@ import numpy as np
 import polars as pl
 from sklearn.model_selection import StratifiedGroupKFold
 
-from src.preprocessing.normalizer import DEFAULT_AST_STATES, NUM_STATES
 from src.preprocessing.parser import parse_to_state_sequence
+from src.preprocessing.vocabulary import DEFAULT_AST_STATES, NUM_STATES
 
-DEFAULT_CONPLAG_ROOT = Path("data/raw/onedrive/conplag/versions")
-DEFAULT_IR_PLAG_ROOT = Path("data/raw/onedrive/ir_plag/IR-Plag-Dataset")
-DEFAULT_OUTPUT_DIR = Path("data/processed")
+DEFAULT_CONPLAG_ROOT = Path("dataset/raw/conplag")
+DEFAULT_IR_PLAG_ROOT = Path("dataset/raw/ir_plag")
+DEFAULT_OUTPUT_DIR = Path("dataset/preprocessed")
 
 
 @dataclass(frozen=True)
