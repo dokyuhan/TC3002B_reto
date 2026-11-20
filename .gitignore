@@ -45,7 +45,19 @@ pnpm-debug.log*
 *.log
 
 # Data, Tensors & Model Artifacts
-data/raw/
+data/raw/*
+!data/raw/onedrive/
+data/raw/onedrive/*
+!data/raw/onedrive/conplag/
+data/raw/onedrive/conplag/*
+!data/raw/onedrive/conplag/versions/
+data/raw/onedrive/conplag/versions/*
+!data/raw/onedrive/conplag/versions/labels.csv
+!data/raw/onedrive/conplag/versions/version_1/
+!data/raw/onedrive/conplag/versions/version_2/
+!data/raw/onedrive/ir_plag/
+data/raw/onedrive/ir_plag/*
+!data/raw/onedrive/ir_plag/IR-Plag-Dataset/
 data/interim/
 *.npz
 !data/processed/*.npz
