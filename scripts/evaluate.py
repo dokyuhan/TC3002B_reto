@@ -247,9 +247,11 @@ def _build_markdown_tables(summary: dict[str, object]) -> str:
     lines: list[str] = [
         "# Evaluation Metrics Summary",
         "",
-        "## 1. ConPlag v2 — 5-Fold Problem-Disjoint Cross-Validation (`strip_boilerplate=True`)",
+        "## 1. ConPlag v2 Cross Validation (`strip_boilerplate=True`)",
         "",
-        "| Model | Micro F1 | Micro Precision | Micro Recall | Micro ROC AUC | Micro FPR | Macro F1 (mean ± std) | Macro AUC (mean ± std) | Threshold | Low-FPR Thr |",
+        "This table shows results from 5 problem disjoint cross validation folds on ConPlag v2 with boilerplate stripped.",
+        "",
+        "| Model | Micro F1 | Micro Precision | Micro Recall | Micro ROC AUC | Micro FPR | Macro F1 (mean ± std) | Macro AUC (mean ± std) | Threshold | Low FPR Threshold |",
         "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
 
@@ -269,9 +271,11 @@ def _build_markdown_tables(summary: dict[str, object]) -> str:
     lines.extend(
         [
             "",
-            "## 2. ConPlag v2 → v1 Cross-Domain Shift & Boilerplate Ablation",
+            "## 2. ConPlag v2 to v1 Domain Shift and Boilerplate Ablation",
             "",
-            "| Model | Regime | v2 OOF F1 | v1 Zero-Shot F1 | F1 Shift (v1 - v2) | |F1 Shift| | v1 ROC AUC | v1 FPR |",
+            "This table compares out of fold F1 on ConPlag v2 against zero shot F1 on ConPlag v1 under both boilerplate regimes.",
+            "",
+            "| Model | Regime | v2 OOF F1 | v1 Zero Shot F1 | F1 Shift (v1 - v2) | Absolute F1 Shift | v1 ROC AUC | v1 FPR |",
             "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
@@ -293,7 +297,9 @@ def _build_markdown_tables(summary: dict[str, object]) -> str:
     lines.extend(
         [
             "",
-            "## 3. IR-Plag Zero-Shot Evaluation (Trained on ConPlag v2, `strip_boilerplate=True`)",
+            "## 3. IR Plag Zero Shot Evaluation (`strip_boilerplate=True`)",
+            "",
+            "All models in this section train on ConPlag v2 with boilerplate stripped and evaluate zero shot on IR Plag.",
             "",
             "### Overall Metrics",
             "",
@@ -305,7 +311,7 @@ def _build_markdown_tables(summary: dict[str, object]) -> str:
     ir_eval: dict[str, dict[str, object]] = summary["ir_plag_zero_shot"]  # type: ignore[assignment]
     for name in MODEL_ORDER:
         entry = ir_eval[name]
-        for op_key, op_label in (("at_threshold", "F1-optimal"), ("at_threshold_low_fpr", "Low-FPR (<=5% v2)")):
+        for op_key, op_label in (("at_threshold", "F1 optimal"), ("at_threshold_low_fpr", "Low FPR (<=5% v2)")):
             m = entry[op_key]  # type: ignore[index]
             lines.append(
                 f"| `{name}` | {op_label} | {m['threshold']:.4f} | {m['precision']:.4f} | "
@@ -315,7 +321,7 @@ def _build_markdown_tables(summary: dict[str, object]) -> str:
     lines.extend(
         [
             "",
-            "### Per-Level Recall (L1–L6) and NON_PLAG FPR",
+            "### Per Level Recall (L1 to L6) and NON_PLAG FPR",
             "",
             "| Model | Operating Point | L1 | L2 | L3 | L4 | L5 | L6 | NON_PLAG FPR |",
             "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -325,8 +331,8 @@ def _build_markdown_tables(summary: dict[str, object]) -> str:
     for name in MODEL_ORDER:
         entry = ir_eval[name]
         for op_key, op_label in (
-            ("per_level_at_threshold", "F1-optimal"),
-            ("per_level_at_threshold_low_fpr", "Low-FPR"),
+            ("per_level_at_threshold", "F1 optimal"),
+            ("per_level_at_threshold_low_fpr", "Low FPR"),
         ):
             lv = entry[op_key]  # type: ignore[index]
             lines.append(
