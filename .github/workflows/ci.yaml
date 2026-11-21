@@ -29,3 +29,18 @@ jobs:
       - name: Run linter
         run: uv run ruff check --select E4,E7,E9,F .
 
+  deploy:
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy hook
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "${RENDER_DEPLOY_HOOK_URL}" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL secret is not set; skipping deploy."
+            exit 0
+          fi
+          curl -fsSL -X POST "${RENDER_DEPLOY_HOOK_URL}"
+
