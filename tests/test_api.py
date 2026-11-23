@@ -11,9 +11,7 @@ import numpy as np
 import pytest
 
 from src.api.main import app
-from src.features.markov import pair_to_tensor
-from src.models.baseline import TfidfCosineBaseline, transition_perplexity
-from src.models.classifier import PairwisePlagiarismClassifier
+from src.models.baseline import TfidfCosineBaseline
 from src.preprocessing.normalizer import DEFAULT_AST_STATES, NUM_STATES
 
 JAVA_CODE_A = """
@@ -75,40 +73,15 @@ EXPECTED_PREDICT_KEYS = {
 
 @pytest.fixture()
 def synthetic_model_dir(tmp_path: Path) -> Path:
-    """Create tiny synthetic classifier, TF-IDF baseline, and metadata in tmp_path."""
+    """Create random-weight CNN, tiny TF-IDF baseline, and metadata in tmp_path."""
     rng = np.random.default_rng(42)
-    tensors: list[np.ndarray] = []
-    perp_a: list[float] = []
-    perp_b: list[float] = []
-    labels: list[int] = []
-
-    for idx in range(12):
-        is_plagiarized = idx % 2
-        seq_a = rng.integers(0, NUM_STATES, size=24, dtype=np.int32)
-        if is_plagiarized:
-            seq_b = seq_a.copy()
-            seq_b[0] = (seq_b[0] + 1) % NUM_STATES
-        else:
-            seq_b = rng.integers(0, NUM_STATES, size=24, dtype=np.int32)
-
-        tensor = pair_to_tensor(seq_a, seq_b, num_states=NUM_STATES, smoothing_alpha=0.01)
-        tensors.append(tensor)
-        perp_a.append(transition_perplexity(seq_a, tensor[0], smoothing_alpha=0.01))
-        perp_b.append(transition_perplexity(seq_b, tensor[1], smoothing_alpha=0.01))
-        labels.append(is_plagiarized)
-
-    X = np.stack(tensors, axis=0).astype(np.float32)
-    y = np.asarray(labels, dtype=np.uint8)
-
-    classifier = PairwisePlagiarismClassifier(
-        n_estimators=10,
-        max_depth=3,
-        num_leaves=7,
-        min_child_samples=2,
-        calibration_cv=2,
-        random_state=42,
-    )
-    classifier.fit(X, y, perplexities=(np.asarray(perp_a), np.asarray(perp_b)))
+    shapes = {
+        "conv1_w": (32, 3, 3, 3), "conv1_b": (32,),
+        "conv2_w": (64, 32, 3, 3), "conv2_b": (64,),
+        "fc1_w": (64, 64 * 4 * 4), "fc1_b": (64,),
+        "fc2_w": (1, 64), "fc2_b": (1,),
+    }
+    weights = {k: rng.normal(0.0, 0.1, size=s).astype(np.float32) for k, s in shapes.items()}
 
     tfidf_baseline = TfidfCosineBaseline(max_features=256)
     tfidf_baseline.fit([JAVA_CODE_A, JAVA_CODE_B, "class Helper { int x = 1; }"])
@@ -123,7 +96,7 @@ def synthetic_model_dir(tmp_path: Path) -> Path:
         "supported_languages": ["java"],
     }
 
-    joblib.dump(classifier, tmp_path / "plagiarism_lgbm.joblib")
+    np.savez(tmp_path / "cnn_weights.npz", **weights, n_states=np.int64(NUM_STATES), pool_size=np.int64(4))
     joblib.dump(tfidf_baseline, tmp_path / "tfidf_baseline.joblib")
     (tmp_path / "model_metadata.json").write_text(
         json.dumps(metadata),

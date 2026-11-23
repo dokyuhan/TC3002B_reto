@@ -1,7 +1,12 @@
 # OS & Editor
 .DS_Store
+Thumbs.db
 .vscode/
 .idea/
+*.swp
+*.swo
+*.save
+*~
 
 # Environment & Secrets
 .env
@@ -11,9 +16,13 @@
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
 .venv/
+venv/
+env/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 .coverage
 htmlcov/
 *.egg-info/
@@ -23,17 +32,52 @@ build/
 # Jupyter
 .ipynb_checkpoints/
 
+# Node / Frontend
+node_modules/
+.next/
+out/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
 # Generated data
 *.npz
 !dataset/preprocessed/*.npz
+!models/cnn_weights.npz
 *.npy
 *.parquet
 !dataset/preprocessed/*.parquet
-docs/evaluation/metrics_summary.json
 
-# Logs
+# Docker & Logs
 *.log
 
-# AI tooling & local context
+# Data, Tensors & Model Artifacts (binarios del Paso 1, 2 y 3)
+data/raw/
+data/interim/
+data/processed/
+dataset/processed/
+dataset/results/*.json
+dataset/results/**/*.json
+*.zarr/
+*.h5
+*.keras
+*.pt
+*.pth
+*.onnx
+*.pkl
+*.joblib
+checkpoints/
+runs/
+mlruns/
+wandb/
+
+# AI-Driven Development
 .claude/
+.cursor/
+.windsurf/
+.gemini/
+.agent/
+.aider*
+
+# Local Context (unshared)
 .context/

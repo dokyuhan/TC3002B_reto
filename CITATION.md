@@ -23,7 +23,7 @@ The project uses these open source libraries:
 
 - `tree-sitter`, `tree-sitter-java`, `tree-sitter-python`, `tree-sitter-cpp`: Parse source code into concrete syntax trees.
 - `numpy`, `scipy`, `polars`: Compute numerical arrays, statistical divergences, and tabular manifests.
-- `scikit-learn`, `lightgbm`, `joblib`: Run TF IDF vectorization, `StratifiedGroupKFold`, probability calibration, decision trees with gradient boosting, and model serialization.
+- `scikit-learn`, `joblib`: Run TF IDF vectorization and model serialization.
 - `fastapi`, `uvicorn`, `httpx`, `streamlit`, `matplotlib`: Provide the REST API, HTTP client, interactive dashboard, and evaluation plots.
 - `pytest`, `ruff`, `uv`: Run automated tests, linting, and locked environment management.
 

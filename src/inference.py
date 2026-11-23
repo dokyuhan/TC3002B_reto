@@ -10,16 +10,15 @@ from pathlib import Path
 from typing import Literal
 
 import joblib
-import numpy as np
 
-from src.features.markov import pair_to_tensor
+from src.features.markov import pair_to_tensor, sequence_to_transition_matrix
 from src.models.baseline import (
     TfidfCosineBaseline,
     frobenius_distance,
     jensen_shannon_divergence,
     transition_perplexity,
 )
-from src.models.classifier import PairwisePlagiarismClassifier
+from src.models.cnn_numpy import NumpyCnnClassifier
 from src.preprocessing.normalizer import normalize_source
 from src.preprocessing.parser import parse_to_state_sequence
 from src.vocabulary import DEFAULT_AST_STATES, NUM_STATES
@@ -40,7 +39,7 @@ class ModelBundle:
     """In-memory bundle of loaded model artifacts and calibrated metadata."""
 
     model_loaded: bool = False
-    classifier: PairwisePlagiarismClassifier | None = None
+    classifier: NumpyCnnClassifier | None = None
     tfidf_baseline: TfidfCosineBaseline | None = None
     model_version: str = "unknown"
     threshold: float = 0.5
@@ -90,8 +89,8 @@ def resolve_model_dir() -> Path:
 
 
 def load_model_bundle(model_dir: Path) -> ModelBundle:
-    """Load classifier, TF-IDF baseline, and metadata JSON without crashing startup."""
-    clf_path = model_dir / "plagiarism_lgbm.joblib"
+    """Load the CNN classifier, TF-IDF baseline, and metadata JSON without crashing startup."""
+    clf_path = model_dir / "cnn_weights.npz"
     tfidf_path = model_dir / "tfidf_baseline.joblib"
     meta_path = model_dir / "model_metadata.json"
 
@@ -106,15 +105,13 @@ def load_model_bundle(model_dir: Path) -> ModelBundle:
 
     try:
         metadata = json.loads(meta_path.read_text(encoding="utf-8"))
-        classifier = joblib.load(clf_path)
+        classifier = NumpyCnnClassifier.load(clf_path)
         tfidf_baseline = joblib.load(tfidf_path)
     except Exception as exc:
         logger.warning("Failed to load model artifacts from %s: %s", model_dir, exc)
         return ModelBundle(model_loaded=False)
 
-    if not isinstance(classifier, PairwisePlagiarismClassifier) or not isinstance(
-        tfidf_baseline, TfidfCosineBaseline
-    ):
+    if not isinstance(tfidf_baseline, TfidfCosineBaseline):
         logger.warning(
             "Loaded artifacts from %s do not match expected model classes.",
             model_dir,
@@ -188,11 +185,11 @@ def analyze_pair(
     perp_a = transition_perplexity(res_a.states, p_a, smoothing_alpha=bundle.smoothing_alpha)
     perp_b = transition_perplexity(res_b.states, p_b, smoothing_alpha=bundle.smoothing_alpha)
 
-    proba = bundle.classifier.predict_proba(
-        tensor[np.newaxis, ...],
-        perplexities=(np.array([perp_a]), np.array([perp_b])),
-    )
-    plagiarism_probability = float(proba[0, 1])
+    # The CNN was trained on unsmoothed matrices with a signed difference channel
+    # (model_training/data/build_matrices.py), so it gets its own input instead of the smoothed tensor above.
+    raw_a = sequence_to_transition_matrix(res_a.states, num_states=bundle.num_states)
+    raw_b = sequence_to_transition_matrix(res_b.states, num_states=bundle.num_states)
+    plagiarism_probability = bundle.classifier.predict_pair(raw_a, raw_b)
 
     markov_jsd = float(jensen_shannon_divergence(p_a, p_b))
     markov_frobenius = float(frobenius_distance(p_a, p_b))
