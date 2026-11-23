@@ -1,0 +1,74 @@
+{
+  "smoothing_alpha": 0.01,
+  "num_states": 12,
+  "strip_boilerplate": true,
+  "supported_languages": [
+    "java"
+  ],
+  "model_version": "0.2.0-cnn",
+  "classifier": "cnn",
+  "threshold": 0.5,
+  "threshold_low_fpr": 0.5,
+  "cnn_metrics": {
+    "balanced_val": {
+      "threshold": 0.5,
+      "n_samples": 168,
+      "accuracy": 0.7857142857142857,
+      "precision": 0.7391304347826086,
+      "recall": 0.3617021276595745,
+      "f1": 0.4857142857142857,
+      "false_positive_rate": 0.049586776859504134,
+      "pr_auc": 0.6456541604758098
+    },
+    "balanced_test": {
+      "threshold": 0.5,
+      "n_samples": 181,
+      "accuracy": 0.8895027624309392,
+      "precision": 0.9333333333333333,
+      "recall": 0.6086956521739131,
+      "f1": 0.7368421052631579,
+      "false_positive_rate": 0.014814814814814815,
+      "pr_auc": 0.877537827991184
+    },
+    "balanced_ir_plag": {
+      "threshold": 0.5,
+      "n_samples": 460,
+      "accuracy": 0.6108695652173913,
+      "precision": 0.8636363636363636,
+      "recall": 0.5887323943661972,
+      "f1": 0.7001675041876047,
+      "false_positive_rate": 0.3142857142857143,
+      "pr_auc": 0.8684045316646943
+    },
+    "low_fpr_val": {
+      "threshold": 0.5,
+      "n_samples": 168,
+      "accuracy": 0.7857142857142857,
+      "precision": 0.7391304347826086,
+      "recall": 0.3617021276595745,
+      "f1": 0.4857142857142857,
+      "false_positive_rate": 0.049586776859504134,
+      "pr_auc": 0.6456541604758098
+    },
+    "low_fpr_test": {
+      "threshold": 0.5,
+      "n_samples": 181,
+      "accuracy": 0.8895027624309392,
+      "precision": 0.9333333333333333,
+      "recall": 0.6086956521739131,
+      "f1": 0.7368421052631579,
+      "false_positive_rate": 0.014814814814814815,
+      "pr_auc": 0.877537827991184
+    },
+    "low_fpr_ir_plag": {
+      "threshold": 0.5,
+      "n_samples": 460,
+      "accuracy": 0.6108695652173913,
+      "precision": 0.8636363636363636,
+      "recall": 0.5887323943661972,
+      "f1": 0.7001675041876047,
+      "false_positive_rate": 0.3142857142857143,
+      "pr_auc": 0.8684045316646943
+    }
+  }
+}

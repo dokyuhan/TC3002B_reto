@@ -2,7 +2,7 @@
 
 from src.preprocessing.normalizer import normalize_source
 from src.preprocessing.parser import ParseResult, parse_to_state_sequence
-from src.preprocessing.vocabulary import (
+from src.vocabulary import (
     DEFAULT_AST_STATES,
     NUM_STATES,
     PAD_TOKEN,
