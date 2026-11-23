@@ -9,6 +9,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import html
+import io
 import json
 import os
 from typing import Any
@@ -626,26 +627,32 @@ def _render_kpi_panel(kpi_slot: Any, result: dict[str, Any]) -> None:
                     st.caption(spec["description"])
 
 
-def _build_heatmap_figure(result: dict[str, Any]) -> plt.Figure | None:
-    """Validate transition matrix dimensions and build the heatmap figure if valid."""
+def _render_heatmap_png(result: dict[str, Any]) -> bytes | None:
+    """Validate transition matrix dimensions and rasterize the heatmap to PNG bytes."""
     state_names = list(result.get("state_names", []))
     transition_delta = list(result.get("transition_delta", []))
-    if (
+    if not (
         state_names
         and transition_delta
         and len(transition_delta) == len(state_names)
         and all(len(row) == len(state_names) for row in transition_delta)
     ):
-        return render_transition_heatmap(state_names, transition_delta)
-    return None
+        return None
+
+    fig = render_transition_heatmap(state_names, transition_delta)
+    buf = io.BytesIO()
+    try:
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=200)
+        return buf.getvalue()
+    finally:
+        plt.close(fig)
 
 
-def _paint_heatmap_panel(heatmap_slot: Any, fig: plt.Figure | None) -> None:
-    """Render a prepared heatmap figure or a mismatch warning into a slot."""
+def _paint_heatmap_panel(heatmap_slot: Any, heatmap_png: bytes | None) -> None:
+    """Render pre-rendered heatmap PNG bytes or a mismatch warning into a slot."""
     with heatmap_slot.container():
-        if fig is not None:
-            st.pyplot(fig, use_container_width=True)
-            plt.close(fig)
+        if heatmap_png is not None:
+            st.image(heatmap_png, width="stretch")
         else:
             st.warning(
                 "Transition matrix data was empty or mismatched. "
@@ -722,9 +729,14 @@ def _render_cached_results(
     result = saved["result"]
     _render_kpi_panel(kpi_slot, result)
 
-    with heatmap_slot.spinner("Rendering transition heatmap..."):
-        fig = _build_heatmap_figure(result)
-    _paint_heatmap_panel(heatmap_slot, fig)
+    heatmap_png = saved.get("heatmap_png")
+    if heatmap_png is None:
+        with heatmap_slot.spinner("Rendering transition heatmap..."):
+            heatmap_png = _render_heatmap_png(result)
+            saved["heatmap_png"] = heatmap_png
+            _paint_heatmap_panel(heatmap_slot, heatmap_png)
+    else:
+        _paint_heatmap_panel(heatmap_slot, heatmap_png)
 
     with diff_slot.spinner("Preparing code diff..."):
         diff_payload = _prepare_diff_payload(
@@ -732,7 +744,7 @@ def _render_cached_results(
             saved["code_b"],
             saved.get("language", "java"),
         )
-    _paint_diff_panel(diff_slot, diff_payload)
+        _paint_diff_panel(diff_slot, diff_payload)
 
 
 def _run_analysis_into_slots(
@@ -773,8 +785,6 @@ def _run_analysis_into_slots(
     result: dict[str, Any] | None = None
     status_code: int | None = None
     error_detail: str | None = None
-    fig: plt.Figure | None = None
-    diff_payload: tuple[str, int] | None = None
 
     with diff_slot.spinner("Preparing code diff..."):
         with heatmap_slot.spinner("Rendering transition heatmap..."):
@@ -787,28 +797,30 @@ def _run_analysis_into_slots(
                     operating_mode="balanced",
                 )
 
-            st.session_state["last_analysis_key"] = analysis_key
+                st.session_state["last_analysis_key"] = analysis_key
+                if result is not None:
+                    st.session_state["last_result"] = {
+                        "result": result,
+                        "code_a": code_a,
+                        "code_b": code_b,
+                        "language": language,
+                    }
+                    st.session_state["last_error"] = None
+                    _render_kpi_panel(kpi_slot, result)
+                else:
+                    st.session_state["last_result"] = None
+                    st.session_state["last_error"] = (status_code, error_detail)
+
             if result is not None:
-                st.session_state["last_result"] = {
-                    "result": result,
-                    "code_a": code_a,
-                    "code_b": code_b,
-                    "language": language,
-                }
-                st.session_state["last_error"] = None
-                _render_kpi_panel(kpi_slot, result)
-                fig = _build_heatmap_figure(result)
-            else:
-                st.session_state["last_result"] = None
-                st.session_state["last_error"] = (status_code, error_detail)
+                heatmap_png = _render_heatmap_png(result)
+                st.session_state["last_result"]["heatmap_png"] = heatmap_png
+                _paint_heatmap_panel(heatmap_slot, heatmap_png)
 
         if result is not None:
-            _paint_heatmap_panel(heatmap_slot, fig)
             diff_payload = _prepare_diff_payload(code_a, code_b, language)
+            _paint_diff_panel(diff_slot, diff_payload)
 
-    if result is not None:
-        _paint_diff_panel(diff_slot, diff_payload)
-    else:
+    if result is None:
         _render_unavailable_placeholders(kpi_slot, heatmap_slot, diff_slot)
 
 
