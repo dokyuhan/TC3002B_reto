@@ -29,6 +29,9 @@ jobs:
       - name: Run linter
         run: uv run ruff check --select E4,E7,E9,F .
 
+      - name: Run tests
+        run: uv run pytest
+
   deploy:
     needs: validate
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

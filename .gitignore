@@ -29,6 +29,7 @@ build/
 *.npy
 *.parquet
 !dataset/preprocessed/*.parquet
+docs/evaluation/metrics_summary.json
 
 # Logs
 *.log

@@ -1,21 +1,35 @@
 [project]
 name = "tc3002b-reto"
 version = "0.1.0"
-description = "Source code AST preprocessing for plagiarism detection"
+description = "Source code plagiarism and AI code detection system"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "fastapi>=0.165.0",
+    "httpx>=0.28.1",
+    "joblib>=1.4.0",
+    "lightgbm>=4.7.0",
+    "matplotlib>=3.9.0",
     "numpy>=2.5.5",
     "polars>=2.1.0",
+    "pygments>=2.21.0",
     "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+    "streamlit>=1.67.0",
     "tree-sitter>=0.26.1",
     "tree-sitter-cpp>=0.23.4",
     "tree-sitter-java>=0.23.5",
     "tree-sitter-python>=0.25.0",
+    "uvicorn>=0.54.0",
 ]
 
 [dependency-groups]
 dev = [
     "prek>=0.5.11",
+    "pytest>=9.2.0",
     "ruff>=0.11.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
