@@ -263,13 +263,14 @@ def plot_ir_plag_levels(data: dict[str, Any], out_path: Path) -> None:
     low_series = low_vals + [low_fpr]
 
     x = np.arange(len(categories))
-    width = 0.36
+    width = 0.34
+    offset = width / 2 + 0.025
 
     bal_thr = lgbm["at_threshold"]["threshold"]
     low_thr = lgbm["at_threshold_low_fpr"]["threshold"]
 
     bars_bal = ax_left.bar(
-        x - width / 2,
+        x - offset,
         bal_series,
         width,
         label=f"Balanced (thr = {bal_thr:.4f})",
@@ -278,7 +279,7 @@ def plot_ir_plag_levels(data: dict[str, Any], out_path: Path) -> None:
         linewidth=0.7,
     )
     bars_low = ax_left.bar(
-        x + width / 2,
+        x + offset,
         low_series,
         width,
         label=f"Low-FPR (thr = {low_thr:.4f})",
@@ -312,11 +313,11 @@ def plot_ir_plag_levels(data: dict[str, Any], out_path: Path) -> None:
         label_txt = "100%" if h >= 0.9995 else f"{h * 100:.1f}%"
         ax_left.text(
             bar.get_x() + bar.get_width() / 2,
-            h + 0.015,
+            h + 0.018,
             label_txt,
             ha="center",
             va="bottom",
-            fontsize=7.4,
+            fontsize=6.6,
             rotation=0,
         )
 
@@ -559,8 +560,114 @@ def plot_confusion_matrices(data: dict[str, Any], out_path: Path) -> None:
     plt.close(fig)
 
 
+def plot_model_comparison(data: dict[str, Any], out_path: Path) -> None:
+    """Plot a ranked ConPlag v2 scoreboard comparing F1, Precision, Recall, AUC, and FPR."""
+    cv = data["conplag_v2_cv"]
+    ranked = sorted(
+        MODEL_ORDER,
+        key=lambda key: cv[key]["micro_oof"]["f1"],
+        reverse=True,
+    )
+    labels = [MODEL_META[k]["short"].replace("\n", " ") for k in ranked]
+    y = np.arange(len(ranked))
+
+    f1_vals = [cv[k]["micro_oof"]["f1"] for k in ranked]
+    prec_vals = [cv[k]["micro_oof"]["precision"] for k in ranked]
+    rec_vals = [cv[k]["micro_oof"]["recall"] for k in ranked]
+    auc_vals = [cv[k]["micro_oof"]["roc_auc"] for k in ranked]
+    fpr_vals = [cv[k]["micro_oof"]["fpr"] for k in ranked]
+
+    fig, (ax_left, ax_right) = plt.subplots(
+        1,
+        2,
+        figsize=(13.2, 5.4),
+        gridspec_kw={"width_ratios": [1.85, 1.0]},
+    )
+
+    bar_h = 0.19
+    series = [
+        ("ROC AUC", auc_vals, "#1b4965", -1.5 * bar_h),
+        ("F1 Score", f1_vals, "#2a9d8f", -0.5 * bar_h),
+        ("Precision", prec_vals, "#62b6cb", 0.5 * bar_h),
+        ("Recall", rec_vals, "#e9c46a", 1.5 * bar_h),
+    ]
+
+    for metric_name, vals, color, dy in series:
+        bars = ax_left.barh(
+            y + dy,
+            vals,
+            height=bar_h,
+            label=metric_name,
+            color=color,
+            edgecolor="#222222",
+            linewidth=0.45,
+        )
+        for bar, val in zip(bars, vals):
+            ax_left.text(
+                val + 0.012,
+                bar.get_y() + bar.get_height() / 2,
+                f"{val * 100:.1f}%",
+                va="center",
+                ha="left",
+                fontsize=7.3,
+            )
+
+    ax_left.set_yticks(y)
+    ax_left.set_yticklabels(labels, fontsize=9.5, fontweight="bold")
+    ax_left.invert_yaxis()
+    ax_left.set_xlim(0.0, 1.08)
+    ax_left.set_xlabel("Score (Higher is Better)")
+    ax_left.set_title("ConPlag v2 5-Fold CV: Detection Quality", pad=22)
+    ax_left.legend(
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.0),
+        fontsize=8.3,
+        ncol=4,
+        frameon=False,
+    )
+
+    fpr_colors = ["#2a9d8f" if v <= 0.10 else "#e76f51" for v in fpr_vals]
+    bars_fpr = ax_right.barh(
+        y,
+        fpr_vals,
+        height=0.52,
+        color=fpr_colors,
+        edgecolor="#222222",
+        linewidth=0.6,
+    )
+    for bar, val in zip(bars_fpr, fpr_vals):
+        ax_right.text(
+            val + 0.008,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val * 100:.1f}%",
+            va="center",
+            ha="left",
+            fontsize=8.2,
+            fontweight="bold",
+        )
+
+    ax_right.axvline(0.05, color="#555555", linestyle="--", linewidth=1.0, label="5% Low-FPR Target")
+    ax_right.set_yticks(y)
+    ax_right.set_yticklabels([])
+    ax_right.invert_yaxis()
+    ax_right.set_xlim(0.0, 0.34)
+    ax_right.set_xlabel("False Positive Rate (Lower is Better)")
+    ax_right.set_title("False Positive Rate (F1-Optimal Point)", pad=22)
+    ax_right.legend(loc="upper right", fontsize=8.2)
+
+    fig.suptitle(
+        "ConPlag v2 Problem-Disjoint 5-Fold CV Model Scoreboard (Ranked by F1)",
+        fontsize=12.5,
+        fontweight="bold",
+        y=0.98,
+    )
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
+    fig.savefig(out_path, dpi=DPI)
+    plt.close(fig)
+
+
 def main() -> None:
-    """Load metrics_summary.json and render all 5 evaluation figures."""
+    """Load metrics_summary.json and render all 6 evaluation figures."""
     if not METRICS_PATH.is_file():
         raise FileNotFoundError(f"Metrics file not found: {METRICS_PATH}")
 
@@ -571,6 +678,7 @@ def main() -> None:
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
     outputs = [
+        (FIGURES_DIR / "model_comparison.png", plot_model_comparison),
         (FIGURES_DIR / "roc_curves.png", plot_roc_curves),
         (FIGURES_DIR / "pr_curves.png", plot_pr_curves),
         (FIGURES_DIR / "ir_plag_levels.png", plot_ir_plag_levels),

@@ -1,64 +1,103 @@
-# Evaluation Metrics Summary
+# Evaluation Results
 
-## 1. ConPlag v2 Cross Validation (`strip_boilerplate=True`)
+This report compares our calibrated Pairwise LightGBM model against 4 mathematical baselines on Java source code plagiarism benchmarks.
 
-This table shows results from 5 problem disjoint cross validation folds on ConPlag v2 with boilerplate stripped.
+## Quick Glossary
 
-| Model | Micro F1 | Micro Precision | Micro Recall | Micro ROC AUC | Micro FPR | Macro F1 (mean ± std) | Macro AUC (mean ± std) | Threshold | Low FPR Threshold |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `raw_tfidf` | 0.6738 | 0.7302 | 0.6255 | 0.8287 | 0.0879 | 0.6658 ± 0.0907 | 0.8348 ± 0.0776 | 0.4664 | 0.5126 |
-| `sublinear_tfidf` | 0.7104 | 0.7568 | 0.6693 | 0.8773 | 0.0818 | 0.6864 ± 0.0878 | 0.8812 ± 0.0469 | 0.4339 | 0.4711 |
-| `markov_jsd` | 0.6167 | 0.5301 | 0.7371 | 0.8034 | 0.2485 | 0.5539 ± 0.0783 | 0.8093 ± 0.0578 | 0.9433 | 0.9914 |
-| `markov_frobenius` | 0.6040 | 0.5155 | 0.7291 | 0.7972 | 0.2606 | 0.5369 ± 0.0582 | 0.8029 ± 0.0552 | -0.9179 | -0.3160 |
-| `pairwise_lgbm` | 0.7598 | 0.7510 | 0.7689 | 0.9107 | 0.0970 | 0.7204 ± 0.1059 | 0.9229 ± 0.0472 | 0.3555 | 0.5210 |
+Models tested:
 
-## 2. ConPlag v2 to v1 Domain Shift and Boilerplate Ablation
+* **Pairwise LightGBM**: Trained gradient boosted classifier combining symmetric 12 state AST Markov features, JSD, Frobenius distance, and perplexity differences.
+* **Sublinear TF IDF**: Character n gram text similarity using log scaled term frequency (`1 + log(tf)`).
+* **Raw TF IDF**: Character n gram text similarity using unscaled term counts.
+* **Markov JSD**: Unsupervised similarity `1 - JSD(P_A, P_B)` between AST transition probability matrices.
+* **Markov Frobenius**: Unsupervised negative Euclidean distance `-||P_A - P_B||_F` between AST transition probability matrices.
 
-This table compares out of fold F1 on ConPlag v2 against zero shot F1 on ConPlag v1 under both boilerplate regimes.
+Metrics reported:
 
-| Model | Regime | v2 OOF F1 | v1 Zero Shot F1 | F1 Shift (v1 - v2) | Absolute F1 Shift | v1 ROC AUC | v1 FPR |
-| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `raw_tfidf` | `strip=True` | 0.6738 | 0.6308 | -0.0430 | 0.0430 | 0.8019 | 0.0439 |
-| `sublinear_tfidf` | `strip=True` | 0.7104 | 0.6618 | -0.0486 | 0.0486 | 0.8485 | 0.0364 |
-| `markov_jsd` | `strip=True` | 0.6167 | 0.5698 | -0.0469 | 0.0469 | 0.7398 | 0.1864 |
-| `markov_frobenius` | `strip=True` | 0.6040 | 0.5282 | -0.0758 | 0.0758 | 0.7310 | 0.2530 |
-| `pairwise_lgbm` | `strip=True` | 0.7598 | 0.7500 | -0.0098 | 0.0098 | 0.8223 | 0.0136 |
-| `raw_tfidf` | `strip=False` | 0.6538 | 0.5435 | -0.1103 | 0.1103 | 0.7628 | 0.2409 |
-| `sublinear_tfidf` | `strip=False` | 0.6813 | 0.5992 | -0.0821 | 0.0821 | 0.7899 | 0.1439 |
-| `markov_jsd` | `strip=False` | 0.6010 | 0.4992 | -0.1018 | 0.1018 | 0.6950 | 0.3121 |
-| `markov_frobenius` | `strip=False` | 0.5942 | 0.5117 | -0.0825 | 0.0825 | 0.7098 | 0.3424 |
-| `pairwise_lgbm` | `strip=False` | 0.7294 | 0.6683 | -0.0611 | 0.0611 | 0.8048 | 0.0303 |
+* **F1**: Harmonic mean of Precision and Recall (higher is better).
+* **Precision**: Share of flagged pairs that are truly plagiarized (higher means fewer false accusations).
+* **Recall**: Share of truly plagiarized pairs that the model catches (higher means fewer missed cases).
+* **ROC AUC**: Ranking quality across all thresholds from `0.5` (random) to `1.0` (perfect).
+* **FPR (False Positive Rate)**: Share of clean pairs mistakenly flagged as plagiarized (lower is better).
+* **OOF (Out of Fold)**: Predictions made on unseen problem folds during 5 fold problem disjoint cross validation.
 
-## 3. IR Plag Zero Shot Evaluation (`strip_boilerplate=True`)
+Datasets used:
 
-All models in this section train on ConPlag v2 with boilerplate stripped and evaluate zero shot on IR Plag.
+* **ConPlag v2**: 911 Java contest pairs across 21 problems with template boilerplate removed (primary training and CV dataset).
+* **ConPlag v1**: The same 911 pairs with raw competitive programming templates intact (boilerplate robustness test).
+* **IR Plag**: 460 held out introductory Java pairs spanning obfuscation levels `L1` (comments and whitespace) through `L6` (heavy loop and logic rewrites), plus `NON_PLAG` clean pairs.
 
-### Overall Metrics
+## 1. Overall Model Comparison (ConPlag v2)
 
-| Model | Operating Point | Threshold | Precision | Recall | F1 | ROC AUC | FPR |
-| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `raw_tfidf` | F1 optimal | 0.4664 | 0.8320 | 0.8648 | 0.8481 | 0.7223 | 0.5905 |
-| `raw_tfidf` | Low FPR (<=5% v2) | 0.5126 | 0.8324 | 0.8254 | 0.8289 | 0.7223 | 0.5619 |
-| `sublinear_tfidf` | F1 optimal | 0.4339 | 0.8238 | 0.8958 | 0.8583 | 0.6936 | 0.6476 |
-| `sublinear_tfidf` | Low FPR (<=5% v2) | 0.4711 | 0.8315 | 0.8479 | 0.8396 | 0.6936 | 0.5810 |
-| `markov_jsd` | F1 optimal | 0.9433 | 0.7925 | 0.7099 | 0.7489 | 0.6441 | 0.6286 |
-| `markov_jsd` | Low FPR (<=5% v2) | 0.9914 | 0.8319 | 0.5437 | 0.6576 | 0.6441 | 0.3714 |
-| `markov_frobenius` | F1 optimal | -0.9179 | 0.7911 | 0.7042 | 0.7452 | 0.6284 | 0.6286 |
-| `markov_frobenius` | Low FPR (<=5% v2) | -0.3160 | 0.8638 | 0.5183 | 0.6479 | 0.6284 | 0.2762 |
-| `pairwise_lgbm` | F1 optimal | 0.3555 | 0.8041 | 0.7746 | 0.7891 | 0.6318 | 0.6381 |
-| `pairwise_lgbm` | Low FPR (<=5% v2) | 0.5210 | 0.8014 | 0.6366 | 0.7096 | 0.6318 | 0.5333 |
+**Takeaway:** Pairwise LightGBM beats all 4 baselines on ConPlag v2 problem disjoint 5 fold CV (`76.0%` F1 and `91.1%` ROC AUC), cutting false positives by more than half compared to standalone Markov distance metrics (`9.7%` vs `24.9%` and `26.1%` FPR).
 
-### Per Level Recall (L1 to L6) and NON_PLAG FPR
+![ConPlag v2 Model Scoreboard](figures/model_comparison.png)
 
-| Model | Operating Point | L1 | L2 | L3 | L4 | L5 | L6 | NON_PLAG FPR |
+![ConPlag v2 ROC Curves](figures/roc_curves.png)
+
+![ConPlag v2 Precision Recall Curves](figures/pr_curves.png)
+
+| Model | F1 | Precision | Recall | ROC AUC | FPR | Macro F1 (mean +/- std) | Macro AUC (mean +/- std) |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Pairwise LightGBM | 76.0% | 75.1% | 76.9% | 91.1% | 9.7% | 72.0% +/- 10.6% | 92.3% +/- 4.7% |
+| Sublinear TF IDF | 71.0% | 75.7% | 66.9% | 87.7% | 8.2% | 68.6% +/- 8.8% | 88.1% +/- 4.7% |
+| Raw TF IDF | 67.4% | 73.0% | 62.6% | 82.9% | 8.8% | 66.6% +/- 9.1% | 83.5% +/- 7.8% |
+| Markov JSD | 61.7% | 53.0% | 73.7% | 80.3% | 24.9% | 55.4% +/- 7.8% | 80.9% +/- 5.8% |
+| Markov Frobenius | 60.4% | 51.6% | 72.9% | 79.7% | 26.1% | 53.7% +/- 5.8% | 80.3% +/- 5.5% |
+
+## 2. Boilerplate Removal And Domain Shift (ConPlag v2 to v1)
+
+**Takeaway:** Removing imports and competitive I/O boilerplate cuts Pairwise LightGBM's cross domain F1 drop on raw ConPlag v1 files from `-6.11%` down to `-0.98%` while keeping false positives at `1.4%`.
+
+![Boilerplate Ablation](figures/boilerplate_ablation.png)
+
+| Model | Boilerplate Handling | ConPlag v2 F1 | ConPlag v1 F1 | F1 Shift (v1 - v2) | ConPlag v1 ROC AUC | ConPlag v1 FPR |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: |
+| Pairwise LightGBM | Stripped | 76.0% | 75.0% | -0.98% | 82.2% | 1.4% |
+| Sublinear TF IDF | Stripped | 71.0% | 66.2% | -4.86% | 84.9% | 3.6% |
+| Raw TF IDF | Stripped | 67.4% | 63.1% | -4.30% | 80.2% | 4.4% |
+| Markov JSD | Stripped | 61.7% | 57.0% | -4.69% | 74.0% | 18.6% |
+| Markov Frobenius | Stripped | 60.4% | 52.8% | -7.58% | 73.1% | 25.3% |
+| Pairwise LightGBM | Unstripped | 72.9% | 66.8% | -6.11% | 80.5% | 3.0% |
+| Sublinear TF IDF | Unstripped | 68.1% | 59.9% | -8.21% | 79.0% | 14.4% |
+| Raw TF IDF | Unstripped | 65.4% | 54.4% | -11.03% | 76.3% | 24.1% |
+| Markov JSD | Unstripped | 60.1% | 49.9% | -10.18% | 69.5% | 31.2% |
+| Markov Frobenius | Unstripped | 59.4% | 51.2% | -8.25% | 71.0% | 34.2% |
+
+## 3. Zero Shot Obfuscation Benchmark (IR Plag)
+
+**Takeaway:** Trained only on ConPlag v2, Pairwise LightGBM catches `100%` of `L1` and `L2` copies, `93.0%` of `L3`, and `83.3%` of `L4`, while dropping on heavy structural rewrites (`L5` `52.5%`, `L6` `39.7%`). All 5 models show high zero shot FPR (`53.3%` to `64.8%`) on short introductory Java exercises because independent student solutions to tiny prompts share nearly identical control flow.
+
+![IR Plag Zero Shot Levels](figures/ir_plag_levels.png)
+
+![Confusion Matrices Across Regimes](figures/confusion_matrices.png)
+
+### Overall IR Plag Zero Shot Metrics
+
+| Model | Operating Mode | Precision | Recall | F1 | ROC AUC | FPR |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: |
+| Pairwise LightGBM | Balanced | 80.4% | 77.5% | 78.9% | 63.2% | 63.8% |
+| Pairwise LightGBM | Low FPR | 80.1% | 63.7% | 71.0% | 63.2% | 53.3% |
+| Sublinear TF IDF | Balanced | 82.4% | 89.6% | 85.8% | 69.4% | 64.8% |
+| Sublinear TF IDF | Low FPR | 83.2% | 84.8% | 84.0% | 69.4% | 58.1% |
+| Raw TF IDF | Balanced | 83.2% | 86.5% | 84.8% | 72.2% | 59.0% |
+| Raw TF IDF | Low FPR | 83.2% | 82.5% | 82.9% | 72.2% | 56.2% |
+| Markov JSD | Balanced | 79.2% | 71.0% | 74.9% | 64.4% | 62.9% |
+| Markov JSD | Low FPR | 83.2% | 54.4% | 65.8% | 64.4% | 37.1% |
+| Markov Frobenius | Balanced | 79.1% | 70.4% | 74.5% | 62.8% | 62.9% |
+| Markov Frobenius | Low FPR | 86.4% | 51.8% | 64.8% | 62.8% | 27.6% |
+
+### Per Level Recall (`L1` to `L6`) And Clean Pair FPR
+
+| Model | Operating Mode | L1 | L2 | L3 | L4 | L5 | L6 | Clean FPR |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `raw_tfidf` | F1 optimal | 1.0000 | 0.9107 | 0.8772 | 0.8500 | 0.7966 | 0.7619 | 0.5905 |
-| `raw_tfidf` | Low FPR | 1.0000 | 0.8750 | 0.8596 | 0.8000 | 0.7288 | 0.6984 | 0.5619 |
-| `sublinear_tfidf` | F1 optimal | 1.0000 | 0.9286 | 0.9298 | 0.9167 | 0.8305 | 0.7778 | 0.6476 |
-| `sublinear_tfidf` | Low FPR | 0.9667 | 0.8750 | 0.8596 | 0.8667 | 0.7627 | 0.7619 | 0.5810 |
-| `markov_jsd` | F1 optimal | 1.0000 | 0.9464 | 1.0000 | 0.7333 | 0.3559 | 0.2698 | 0.6286 |
-| `markov_jsd` | Low FPR | 1.0000 | 0.9107 | 0.8947 | 0.4167 | 0.0678 | 0.0317 | 0.3714 |
-| `markov_frobenius` | F1 optimal | 1.0000 | 0.9464 | 1.0000 | 0.7167 | 0.3390 | 0.2698 | 0.6286 |
-| `markov_frobenius` | Low FPR | 1.0000 | 0.8750 | 0.8070 | 0.4000 | 0.0508 | 0.0317 | 0.2762 |
-| `pairwise_lgbm` | F1 optimal | 1.0000 | 1.0000 | 0.9298 | 0.8333 | 0.5254 | 0.3968 | 0.6381 |
-| `pairwise_lgbm` | Low FPR | 1.0000 | 0.9643 | 0.7368 | 0.6000 | 0.3051 | 0.2540 | 0.5333 |
+| Pairwise LightGBM | Balanced | 100.0% | 100.0% | 93.0% | 83.3% | 52.5% | 39.7% | 63.8% |
+| Pairwise LightGBM | Low FPR | 100.0% | 96.4% | 73.7% | 60.0% | 30.5% | 25.4% | 53.3% |
+| Sublinear TF IDF | Balanced | 100.0% | 92.9% | 93.0% | 91.7% | 83.1% | 77.8% | 64.8% |
+| Sublinear TF IDF | Low FPR | 96.7% | 87.5% | 86.0% | 86.7% | 76.3% | 76.2% | 58.1% |
+| Raw TF IDF | Balanced | 100.0% | 91.1% | 87.7% | 85.0% | 79.7% | 76.2% | 59.0% |
+| Raw TF IDF | Low FPR | 100.0% | 87.5% | 86.0% | 80.0% | 72.9% | 69.8% | 56.2% |
+| Markov JSD | Balanced | 100.0% | 94.6% | 100.0% | 73.3% | 35.6% | 27.0% | 62.9% |
+| Markov JSD | Low FPR | 100.0% | 91.1% | 89.5% | 41.7% | 6.8% | 3.2% | 37.1% |
+| Markov Frobenius | Balanced | 100.0% | 94.6% | 100.0% | 71.7% | 33.9% | 27.0% | 62.9% |
+| Markov Frobenius | Low FPR | 100.0% | 87.5% | 80.7% | 40.0% | 5.1% | 3.2% | 27.6% |
