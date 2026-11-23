@@ -22,7 +22,7 @@ from src.models.baseline import (
 from src.models.classifier import PairwisePlagiarismClassifier
 from src.preprocessing.normalizer import normalize_source
 from src.preprocessing.parser import parse_to_state_sequence
-from src.preprocessing.vocabulary import DEFAULT_AST_STATES, NUM_STATES
+from src.vocabulary import DEFAULT_AST_STATES, NUM_STATES
 
 logger = logging.getLogger(__name__)
 

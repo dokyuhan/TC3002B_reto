@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import numpy as np
 
-from src.preprocessing.vocabulary import NUM_STATES, PAD_TOKEN
+from src.vocabulary import NUM_STATES, PAD_TOKEN
 
 
 def clean_sequence(
