@@ -274,9 +274,6 @@ def build_diff2html_document(unified_diff: str) -> str:
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <link rel="stylesheet" href="{HLJS_CSS_URL}" />
-  <link rel="stylesheet" href="{DIFF2HTML_CSS_URL}" />
-  <script src="{DIFF2HTML_JS_URL}"></script>
   <style>
     body {{
       margin: 0;
@@ -284,28 +281,94 @@ def build_diff2html_document(unified_diff: str) -> str:
       background: transparent;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     }}
+    .diff-loading {{
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.75rem 0.25rem;
+      color: #31333f;
+      font-size: 0.95rem;
+    }}
+    .st-spinner-ring {{
+      width: 1.15rem;
+      height: 1.15rem;
+      border: 2.5px solid rgba(255, 75, 75, 0.22);
+      border-top-color: #ff4b4b;
+      border-radius: 50%;
+      animation: st-spin 0.75s linear infinite;
+      flex-shrink: 0;
+    }}
+    @keyframes st-spin {{
+      to {{
+        transform: rotate(360deg);
+      }}
+    }}
+    @media (prefers-color-scheme: dark) {{
+      .diff-loading {{
+        color: #fafafa;
+      }}
+    }}
     .d2h-wrapper {{
       margin: 0;
     }}
   </style>
 </head>
 <body>
-  <div id="diff-target"></div>
+  <div id="diff-loading" class="diff-loading" role="status" aria-live="polite">
+    <span class="st-spinner-ring" aria-hidden="true"></span>
+    <span>Loading code diff...</span>
+  </div>
+  <div id="diff-target" style="display:none;"></div>
   <script>
     const diffString = {diff_js_literal};
+    const loadingElement = document.getElementById("diff-loading");
     const targetElement = document.getElementById("diff-target");
-    const configuration = {{
-      drawFileList: false,
-      fileContentToggle: false,
-      matching: "words",
-      outputFormat: "side-by-side",
-      synchronisedScroll: true,
-      highlight: true,
-      renderNothingWhenEmpty: false
-    }};
-    const diff2htmlUi = new Diff2HtmlUI(targetElement, diffString, configuration);
-    diff2htmlUi.draw();
-    diff2htmlUi.highlightCode();
+
+    function loadStylesheet(href) {{
+      return new Promise((resolve) => {{
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = href;
+        link.onload = resolve;
+        link.onerror = resolve;
+        document.head.appendChild(link);
+      }});
+    }}
+
+    function loadScript(src) {{
+      return new Promise((resolve, reject) => {{
+        const script = document.createElement("script");
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error("Failed to load diff viewer script."));
+        document.head.appendChild(script);
+      }});
+    }}
+
+    Promise.allSettled([
+      loadStylesheet({json.dumps(HLJS_CSS_URL)}),
+      loadStylesheet({json.dumps(DIFF2HTML_CSS_URL)}),
+      loadScript({json.dumps(DIFF2HTML_JS_URL)})
+    ]).then(() => {{
+      if (typeof Diff2HtmlUI === "undefined") {{
+        loadingElement.textContent = "Could not load diff viewer assets.";
+        return;
+      }}
+      const configuration = {{
+        drawFileList: false,
+        fileContentToggle: false,
+        matching: "words",
+        outputFormat: "side-by-side",
+        synchronisedScroll: true,
+        highlight: true,
+        renderNothingWhenEmpty: false
+      }};
+      const diff2htmlUi = new Diff2HtmlUI(targetElement, diffString, configuration);
+      diff2htmlUi.draw();
+      diff2htmlUi.highlightCode();
+      loadingElement.style.display = "none";
+      targetElement.style.display = "block";
+    }});
   </script>
 </body>
 </html>
@@ -539,24 +602,12 @@ def _render_inline_hint(message: str, tone: str = "amber") -> None:
     )
 
 
-def _render_results(
-    result: dict[str, Any],
-    code_a: str,
-    code_b: str,
-    language: str,
-) -> None:
-    """Render unified Analysis Results and Side by Side Code Diff."""
-    st.divider()
-    st.subheader("Analysis Results")
-
+def _render_kpi_panel(kpi_slot: Any, result: dict[str, Any]) -> None:
+    """Render Verdict, Plagiarism Probability, and baseline KPI metrics into a slot."""
     prob = float(result.get("plagiarism_probability", 0.0))
     predicted_label = int(result.get("predicted_label", 0))
-    state_names = list(result.get("state_names", []))
-    transition_delta = list(result.get("transition_delta", []))
 
-    left_col, right_col = st.columns(2, gap="large")
-
-    with left_col:
+    with kpi_slot.container():
         _render_verdict_kpi(prob=prob, predicted_label=predicted_label)
 
         for row_start in range(0, len(BASELINE_METRIC_SPECS), 2):
@@ -574,14 +625,25 @@ def _render_results(
                     )
                     st.caption(spec["description"])
 
-    with right_col:
-        if (
-            state_names
-            and transition_delta
-            and len(transition_delta) == len(state_names)
-            and all(len(row) == len(state_names) for row in transition_delta)
-        ):
-            fig = render_transition_heatmap(state_names, transition_delta)
+
+def _build_heatmap_figure(result: dict[str, Any]) -> plt.Figure | None:
+    """Validate transition matrix dimensions and build the heatmap figure if valid."""
+    state_names = list(result.get("state_names", []))
+    transition_delta = list(result.get("transition_delta", []))
+    if (
+        state_names
+        and transition_delta
+        and len(transition_delta) == len(state_names)
+        and all(len(row) == len(state_names) for row in transition_delta)
+    ):
+        return render_transition_heatmap(state_names, transition_delta)
+    return None
+
+
+def _paint_heatmap_panel(heatmap_slot: Any, fig: plt.Figure | None) -> None:
+    """Render a prepared heatmap figure or a mismatch warning into a slot."""
+    with heatmap_slot.container():
+        if fig is not None:
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
         else:
@@ -590,28 +652,118 @@ def _render_results(
                 "The heatmap did not render."
             )
 
-    st.divider()
-    st.subheader("Code Diff")
-    unified_text = build_unified_diff(code_a, code_b, language=language)
-    if unified_text:
-        diff_html = build_diff2html_document(unified_text)
-        line_count = max(len(code_a.splitlines()), len(code_b.splitlines()), 10)
-        frame_height = min(max(line_count * 24 + 90, 320), 760)
-        components.html(diff_html, height=frame_height, scrolling=True)
-    else:
-        st.info("Code A and Code B are identical.")
 
-
-def _run_analysis_if_ready(
+def _prepare_diff_payload(
     code_a: str,
     code_b: str,
     language: str,
+) -> tuple[str, int] | None:
+    """Build diff2html HTML and frame height, or return None when inputs match."""
+    unified_text = build_unified_diff(code_a, code_b, language=language)
+    if not unified_text:
+        return None
+    diff_html = build_diff2html_document(unified_text)
+    line_count = max(len(code_a.splitlines()), len(code_b.splitlines()), 10)
+    frame_height = min(max(line_count * 24 + 90, 320), 760)
+    return diff_html, frame_height
+
+
+def _paint_diff_panel(
+    diff_slot: Any,
+    diff_payload: tuple[str, int] | None,
 ) -> None:
-    """Auto run prediction when inputs change and both editors are non empty."""
+    """Render the side by side diff iframe or an identical-code notice into a slot."""
+    with diff_slot.container():
+        if diff_payload is not None:
+            diff_html, frame_height = diff_payload
+            components.html(diff_html, height=frame_height, scrolling=True)
+        else:
+            st.info("Code A and Code B are identical.")
+
+
+def _render_empty_placeholders(
+    kpi_slot: Any,
+    heatmap_slot: Any,
+    diff_slot: Any,
+    has_a: bool,
+    has_b: bool,
+) -> None:
+    """Render guidance placeholders when one or both code inputs are empty."""
+    if not has_a and not has_b:
+        kpi_message = (
+            "Select a source in the sidebar (upload files, paste code, or pick "
+            "a demo sample) to view similarity metrics."
+        )
+    elif not has_a:
+        kpi_message = "Add Code A to compute plagiarism metrics."
+    else:
+        kpi_message = "Add Code B to compute plagiarism metrics."
+
+    kpi_slot.info(kpi_message)
+    heatmap_slot.info(
+        "Provide both Code A and Code B to render the AST transition delta heatmap."
+    )
+    diff_slot.info(
+        "Select a source or provide both Code A and Code B to view the code diff."
+    )
+
+
+def _render_unavailable_placeholders(
+    kpi_slot: Any,
+    heatmap_slot: Any,
+    diff_slot: Any,
+) -> None:
+    """Render fallback placeholders when analysis fails with an API or input error."""
+    kpi_slot.info("Analysis metrics are unavailable until the request succeeds.")
+    heatmap_slot.info("Transition heatmap is unavailable until the request succeeds.")
+    diff_slot.info(
+        "Code diff is unavailable until both inputs pass validation and analysis succeeds."
+    )
+
+
+def _render_cached_results(
+    kpi_slot: Any,
+    heatmap_slot: Any,
+    diff_slot: Any,
+    saved: dict[str, Any],
+) -> None:
+    """Render previously computed results into slots with spinners for heavy views."""
+    result = saved["result"]
+    _render_kpi_panel(kpi_slot, result)
+
+    with heatmap_slot.spinner("Rendering transition heatmap..."):
+        fig = _build_heatmap_figure(result)
+    _paint_heatmap_panel(heatmap_slot, fig)
+
+    with diff_slot.spinner("Preparing code diff..."):
+        diff_payload = _prepare_diff_payload(
+            saved["code_a"],
+            saved["code_b"],
+            saved.get("language", "java"),
+        )
+    _paint_diff_panel(diff_slot, diff_payload)
+
+
+def _run_analysis_into_slots(
+    code_a: str,
+    code_b: str,
+    language: str,
+    kpi_slot: Any,
+    heatmap_slot: Any,
+    diff_slot: Any,
+) -> None:
+    """Run prediction if inputs changed and populate section slots progressively."""
     if not code_a.strip() or not code_b.strip():
         st.session_state["last_result"] = None
         st.session_state["last_analysis_key"] = None
         st.session_state["last_error"] = None
+        _render_empty_placeholders(
+            kpi_slot=kpi_slot,
+            heatmap_slot=heatmap_slot,
+            diff_slot=diff_slot,
+            has_a=bool(code_a.strip()),
+            has_b=bool(code_b.strip()),
+        )
         return
 
     analysis_key = (
@@ -620,29 +772,53 @@ def _run_analysis_if_ready(
         language,
     )
     if analysis_key == st.session_state["last_analysis_key"]:
+        saved = st.session_state.get("last_result")
+        if saved is not None:
+            _render_cached_results(kpi_slot, heatmap_slot, diff_slot, saved)
+        else:
+            _render_unavailable_placeholders(kpi_slot, heatmap_slot, diff_slot)
         return
 
-    with st.spinner("Running analysis..."):
-        result, status_code, error_detail = request_prediction(
-            api_url=API_URL,
-            code_a=code_a,
-            code_b=code_b,
-            language=language,
-            operating_mode="balanced",
-        )
+    result: dict[str, Any] | None = None
+    status_code: int | None = None
+    error_detail: str | None = None
+    fig: plt.Figure | None = None
+    diff_payload: tuple[str, int] | None = None
 
-    st.session_state["last_analysis_key"] = analysis_key
+    with diff_slot.spinner("Preparing code diff..."):
+        with heatmap_slot.spinner("Rendering transition heatmap..."):
+            with kpi_slot.spinner("Computing analysis metrics..."):
+                result, status_code, error_detail = request_prediction(
+                    api_url=API_URL,
+                    code_a=code_a,
+                    code_b=code_b,
+                    language=language,
+                    operating_mode="balanced",
+                )
+
+            st.session_state["last_analysis_key"] = analysis_key
+            if result is not None:
+                st.session_state["last_result"] = {
+                    "result": result,
+                    "code_a": code_a,
+                    "code_b": code_b,
+                    "language": language,
+                }
+                st.session_state["last_error"] = None
+                _render_kpi_panel(kpi_slot, result)
+                fig = _build_heatmap_figure(result)
+            else:
+                st.session_state["last_result"] = None
+                st.session_state["last_error"] = (status_code, error_detail)
+
+        if result is not None:
+            _paint_heatmap_panel(heatmap_slot, fig)
+            diff_payload = _prepare_diff_payload(code_a, code_b, language)
+
     if result is not None:
-        st.session_state["last_result"] = {
-            "result": result,
-            "code_a": code_a,
-            "code_b": code_b,
-            "language": language,
-        }
-        st.session_state["last_error"] = None
+        _paint_diff_panel(diff_slot, diff_payload)
     else:
-        st.session_state["last_result"] = None
-        st.session_state["last_error"] = (status_code, error_detail)
+        _render_unavailable_placeholders(kpi_slot, heatmap_slot, diff_slot)
 
 
 def main() -> None:
@@ -682,10 +858,28 @@ def main() -> None:
             )
             hint_slot_b = st.empty()
 
-    _run_analysis_if_ready(
+    collapsed_hints_slot = st.empty()
+    error_slot = st.empty()
+
+    st.divider()
+    st.subheader("Analysis Results")
+    left_col, right_col = st.columns(2, gap="large")
+    with left_col:
+        kpi_slot = st.empty()
+    with right_col:
+        heatmap_slot = st.empty()
+
+    st.divider()
+    st.subheader("Code Diff")
+    diff_slot = st.empty()
+
+    _run_analysis_into_slots(
         code_a=code_a,
         code_b=code_b,
         language=language,
+        kpi_slot=kpi_slot,
+        heatmap_slot=heatmap_slot,
+        diff_slot=diff_slot,
     )
 
     has_a = bool(code_a.strip())
@@ -712,33 +906,27 @@ def main() -> None:
         if hint_b is not None:
             with hint_slot_b:
                 _render_inline_hint(hint_b, tone="amber")
-    else:
-        if hint_a is not None:
-            _render_inline_hint(f"Code A: {hint_a}", tone="amber")
-        if hint_b is not None:
-            _render_inline_hint(f"Code B: {hint_b}", tone="amber")
+    elif hint_a is not None or hint_b is not None:
+        with collapsed_hints_slot.container():
+            if hint_a is not None:
+                _render_inline_hint(f"Code A: {hint_a}", tone="amber")
+            if hint_b is not None:
+                _render_inline_hint(f"Code B: {hint_b}", tone="amber")
 
     if last_error is not None:
         status_code, error_detail = last_error
-        if status_code == 422:
-            _render_inline_hint(str(error_detail), tone="red")
-        elif status_code == 503:
-            st.error(
-                f"Model service is not ready (HTTP 503): {error_detail}. "
-                "Make sure that the backend loaded the model files."
-            )
-        elif status_code is not None:
-            st.error(f"Backend failed with HTTP {status_code}: {error_detail}")
-        else:
-            st.error(f"Connection to {API_URL} failed: {error_detail}")
-
-    if saved is not None:
-        _render_results(
-            result=saved["result"],
-            code_a=saved["code_a"],
-            code_b=saved["code_b"],
-            language=saved.get("language", "java"),
-        )
+        with error_slot.container():
+            if status_code == 422:
+                _render_inline_hint(str(error_detail), tone="red")
+            elif status_code == 503:
+                st.error(
+                    f"Model service is not ready (HTTP 503): {error_detail}. "
+                    "Make sure that the backend loaded the model files."
+                )
+            elif status_code is not None:
+                st.error(f"Backend failed with HTTP {status_code}: {error_detail}")
+            else:
+                st.error(f"Connection to {API_URL} failed: {error_detail}")
 
 
 if __name__ == "__main__":
