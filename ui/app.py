@@ -688,24 +688,17 @@ def _render_empty_placeholders(
     has_a: bool,
     has_b: bool,
 ) -> None:
-    """Render guidance placeholders when one or both code inputs are empty."""
+    """Render bare guidance captions when one or both code inputs are empty."""
     if not has_a and not has_b:
-        kpi_message = (
-            "Select a source in the sidebar (upload files, paste code, or pick "
-            "a demo sample) to view similarity metrics."
-        )
-    elif not has_a:
-        kpi_message = "Add Code A to compute plagiarism metrics."
-    else:
-        kpi_message = "Add Code B to compute plagiarism metrics."
+        kpi_slot.caption("Select a source or add Code A and Code B to view metrics.")
+        heatmap_slot.caption("Select a source or add Code A and Code B to view the heatmap.")
+        diff_slot.caption("Select a source or add Code A and Code B to view the diff.")
+        return
 
-    kpi_slot.info(kpi_message)
-    heatmap_slot.info(
-        "Provide both Code A and Code B to render the AST transition delta heatmap."
-    )
-    diff_slot.info(
-        "Select a source or provide both Code A and Code B to view the code diff."
-    )
+    missing_label = "Code A" if not has_a else "Code B"
+    kpi_slot.caption(f"Add {missing_label} to view metrics.")
+    heatmap_slot.caption(f"Add {missing_label} to view the heatmap.")
+    diff_slot.caption(f"Add {missing_label} to view the diff.")
 
 
 def _render_unavailable_placeholders(
@@ -713,12 +706,10 @@ def _render_unavailable_placeholders(
     heatmap_slot: Any,
     diff_slot: Any,
 ) -> None:
-    """Render fallback placeholders when analysis fails with an API or input error."""
-    kpi_slot.info("Analysis metrics are unavailable until the request succeeds.")
-    heatmap_slot.info("Transition heatmap is unavailable until the request succeeds.")
-    diff_slot.info(
-        "Code diff is unavailable until both inputs pass validation and analysis succeeds."
-    )
+    """Render bare fallback captions when analysis fails with an API or input error."""
+    kpi_slot.caption("Metrics unavailable.")
+    heatmap_slot.caption("Heatmap unavailable.")
+    diff_slot.caption("Diff unavailable.")
 
 
 def _render_cached_results(
