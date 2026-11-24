@@ -1,28 +1,32 @@
 flowchart TD
-    subgraph Ingestion
-        A1["Source Code Pair"] --> B1["Boilerplate And Whitespace Normalizer"]
+    subgraph SharedFoundation["Shared Foundation"]
+        A1["Source Code Input"] --> B1["Boilerplate And Whitespace Normalizer"]
         B1 --> C1["Tree Sitter AST Parser"]
         C1 --> D1["12 State Sequence Mapper"]
     end
 
-    subgraph FeaturePipeline["Feature Extraction"]
-        D1 --> F1["Binary NPZ And Parquet Sequence Cache"]
-        F1 --> E1["Smoothed Markov Tensor (alpha 0.01, abs diff)"]
-        F1 --> E3["Unsmoothed Markov Tensor (alpha 0.0, signed diff)"]
-        B1 --> E2["Character N Gram TF IDF Baseline"]
+    subgraph PairwisePlagiarism["Task: pairwise_plagiarism (2 Files)"]
+        D1 --> P1["Smoothed Markov Tensor (alpha 0.01, abs diff)"]
+        D1 --> P2["Unsmoothed Markov Tensor (alpha 0.0, signed diff)"]
+        B1 --> P3["Character N Gram TF IDF Baseline"]
+        P1 --> PM1["Calibrated Pairwise LightGBM (Default)"]
+        P2 --> PM2["NumPy Pairwise CNN (Selectable)"]
+        P3 --> PM3["TF IDF Cosine Baseline"]
+        PM1 --> PR["models/pairwise_plagiarism/manifest.json"]
+        PM2 --> PR
+        PM3 --> PR
     end
 
-    subgraph ModelingEngine["Modeling Registry"]
-        E1 --> G1["Symmetric Markov Distance Metrics"]
-        E1 --> G2["Calibrated Pairwise LightGBM (Default)"]
-        E3 --> G4["NumPy Pairwise CNN (Selectable)"]
-        E2 --> G3["TF IDF Cosine Baseline"]
+    subgraph AiAuthorship["Task: ai_authorship (1 File)"]
+        D1 --> AI1["Single File 12x12 Markov Matrix"]
+        B1 --> AI2["Normalized Single File Source"]
+        AI1 --> AIR["models/ai_authorship/manifest.json"]
+        AI2 --> AIR
     end
 
     subgraph ServiceLayer["Presentation"]
-        G1 --> H1["FastAPI Inference Service"]
-        G2 --> H1
-        G4 --> H1
-        G3 --> H1
-        H1 --> I1["Streamlit Interactive Dashboard"]
+        PR --> H1["FastAPI: POST /predict/pairwise_plagiarism (+ /predict)"]
+        AIR --> H2["FastAPI: POST /predict/ai_authorship"]
+        H1 --> I1["Streamlit UI: Pairwise Plagiarism Tab"]
+        H2 --> I2["Streamlit UI: AI Authorship Tab"]
     end

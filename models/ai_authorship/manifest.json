@@ -1,0 +1,8 @@
+{
+  "task": "ai_authorship",
+  "schema_version": 2,
+  "default_model": null,
+  "num_states": 12,
+  "diagnostic_smoothing_alpha": 0.01,
+  "models": {}
+}

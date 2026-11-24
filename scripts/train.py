@@ -20,13 +20,17 @@ from sklearn.metrics import (
 from src.features.markov import pair_to_tensor
 from src.models.baseline import TfidfCosineBaseline, transition_perplexity
 from src.models.classifier import PairwisePlagiarismClassifier
-from src.models.registry import ensure_manifest_entry, write_model_metadata
+from src.models.registry import (
+    TASK_PAIRWISE_PLAGIARISM,
+    ensure_manifest_entry,
+    write_model_metadata,
+)
 from src.preprocessing.normalizer import normalize_source
 from src.preprocessing.parser import parse_to_state_sequence
 from src.vocabulary import NUM_STATES
 
 DEFAULT_CONPLAG_V2_MANIFEST = Path("dataset/preprocessed/conplag_v2_manifest.parquet")
-DEFAULT_MODELS_DIR = Path("models")
+DEFAULT_MODELS_DIR = Path("models") / TASK_PAIRWISE_PLAGIARISM
 MODEL_VERSION = "0.1.0"
 DEFAULT_SMOOTHING_ALPHA = 0.01
 MAX_BUNDLE_BYTES = 1_048_576  # 1 MB
@@ -293,6 +297,7 @@ def train_and_save_bundle(
     joblib.dump(final_tfidf, tfidf_path, compress=3)
 
     metadata: dict[str, object] = {
+        "task": TASK_PAIRWISE_PLAGIARISM,
         "kind": "lgbm",
         "display_name": "Pairwise LightGBM",
         "artifact": lgbm_path.name,
@@ -310,6 +315,7 @@ def train_and_save_bundle(
         models_dir,
         model_id="lgbm",
         metadata_filename=meta_filename,
+        task=TASK_PAIRWISE_PLAGIARISM,
         num_states=int(NUM_STATES),
     )
 

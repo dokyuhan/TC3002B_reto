@@ -162,6 +162,7 @@ def cnn_model_dir(tmp_path: Path) -> Path:
     baseline.fit([JAVA_A, JAVA_B, "class Helper { int x = 1; }"])
     joblib.dump(baseline, tmp_path / "tfidf_baseline.joblib")
     meta: dict[str, object] = {
+        "task": "pairwise_plagiarism",
         "kind": "cnn",
         "display_name": "Pairwise CNN",
         "artifact": "cnn_weights.npz",
@@ -210,7 +211,10 @@ def test_cnn_input_matches_training_features() -> None:
     assert matrix[3].sum() == pytest.approx(1.0)
 
 
-@pytest.mark.skipif(not (REPO_MODELS / "cnn_weights.npz").is_file(), reason="trained CNN not exported")
+@pytest.mark.skipif(
+    not (REPO_MODELS / "pairwise_plagiarism" / "cnn_weights.npz").is_file(),
+    reason="trained CNN not exported",
+)
 def test_real_exported_model_serves_predictions(monkeypatch: pytest.MonkeyPatch) -> None:
     """The committed models/ directory loads both registered models and serves predictions."""
     bundle = load_model_bundle(REPO_MODELS)

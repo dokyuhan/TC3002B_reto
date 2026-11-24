@@ -89,6 +89,7 @@ def synthetic_model_dir(tmp_path: Path) -> Path:
     tfidf_baseline.fit([JAVA_CODE_A, JAVA_CODE_B, "class Helper { int x = 1; }"])
 
     metadata: dict[str, object] = {
+        "task": "pairwise_plagiarism",
         "kind": "cnn",
         "display_name": "Pairwise CNN",
         "artifact": "cnn_weights.npz",
@@ -130,22 +131,37 @@ def test_health_with_loaded_models(
 
     assert response.status_code == 200
     body = response.json()
+    expected_descriptor = {
+        "id": "cnn",
+        "display_name": "Pairwise CNN",
+        "model_version": "0.1.0-test",
+        "supported_languages": ["java"],
+        "threshold": 0.35,
+        "threshold_low_fpr": 0.65,
+    }
     assert body == {
         "status": "ok",
         "model_loaded": True,
         "supported_languages": ["java"],
         "model_version": "0.1.0-test",
         "default_model": "cnn",
-        "available_models": [
-            {
-                "id": "cnn",
-                "display_name": "Pairwise CNN",
+        "available_models": [expected_descriptor],
+        "tasks": {
+            "pairwise_plagiarism": {
+                "model_loaded": True,
+                "default_model": "cnn",
                 "model_version": "0.1.0-test",
                 "supported_languages": ["java"],
-                "threshold": 0.35,
-                "threshold_low_fpr": 0.65,
-            }
-        ],
+                "available_models": [expected_descriptor],
+            },
+            "ai_authorship": {
+                "model_loaded": False,
+                "default_model": None,
+                "model_version": "unknown",
+                "supported_languages": [],
+                "available_models": [],
+            },
+        },
     }
 
 

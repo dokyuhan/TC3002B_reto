@@ -1,4 +1,4 @@
-"""Pluggable pairwise plagiarism scorer adapters and split manifest metadata registry."""
+"""Task scoped metadata registry and pairwise plagiarism scorer adapters."""
 
 from __future__ import annotations
 
@@ -19,9 +19,22 @@ from src.models.classifier import PairwisePlagiarismClassifier
 from src.models.cnn_numpy import NumpyCnnClassifier
 from src.vocabulary import NUM_STATES
 
+TASK_PAIRWISE_PLAGIARISM = "pairwise_plagiarism"
+TASK_AI_AUTHORSHIP = "ai_authorship"
+SUPPORTED_TASKS: tuple[str, ...] = (TASK_PAIRWISE_PLAGIARISM, TASK_AI_AUTHORSHIP)
+
 MANIFEST_FILENAME = "manifest.json"
 MANIFEST_SCHEMA_VERSION = 2
 DIAGNOSTIC_SMOOTHING_ALPHA = 0.01
+
+
+def validate_task_name(task: str) -> str:
+    """Validate and normalize a task identifier against `SUPPORTED_TASKS`."""
+    normalized = str(task).strip().lower()
+    if normalized not in SUPPORTED_TASKS:
+        supported = ", ".join(SUPPORTED_TASKS)
+        raise ValueError(f"Unsupported task '{task}'. Supported tasks: {supported}.")
+    return normalized
 
 
 def _validate_non_negative_finite(name: str, value: float) -> float:
@@ -149,9 +162,10 @@ class CnnPairwiseScorer:
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """Validated per model metadata parsed from `models/<model_id>_metadata.json`."""
+    """Validated per model metadata parsed from `<task>/<model_id>_metadata.json`."""
 
     model_id: str
+    task: str
     kind: str
     display_name: str
     artifact: str
@@ -174,6 +188,10 @@ class LoadedModel:
     @property
     def model_id(self) -> str:
         return self.spec.model_id
+
+    @property
+    def task(self) -> str:
+        return self.spec.task
 
     @property
     def kind(self) -> str:
@@ -212,11 +230,25 @@ class LoadedModel:
         return self.spec.supported_languages
 
 
-def load_model_spec(model_id: str, metadata_path: Path) -> ModelSpec:
+def load_model_spec(
+    model_id: str,
+    metadata_path: Path,
+    *,
+    expected_task: str | None = None,
+) -> ModelSpec:
     """Read and validate a per model metadata JSON file."""
     raw = json.loads(metadata_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(f"Metadata file {metadata_path} must contain a JSON object.")
+
+    raw_task = raw.get("task")
+    if raw_task is None:
+        raise ValueError(f"Metadata file {metadata_path} is missing required 'task' field.")
+    task = validate_task_name(str(raw_task))
+    if expected_task is not None and task != expected_task:
+        raise ValueError(
+            f"Model '{model_id}' task '{task}' does not match expected task '{expected_task}'."
+        )
 
     kind = str(raw["kind"]).strip().lower()
     artifact = str(raw["artifact"]).strip()
@@ -250,6 +282,7 @@ def load_model_spec(model_id: str, metadata_path: Path) -> ModelSpec:
 
     return ModelSpec(
         model_id=model_id,
+        task=task,
         kind=kind,
         display_name=str(raw.get("display_name", model_id)),
         artifact=artifact,
@@ -264,7 +297,12 @@ def load_model_spec(model_id: str, metadata_path: Path) -> ModelSpec:
 
 
 def load_scorer(model_dir: Path, spec: ModelSpec) -> PairwiseScorer:
-    """Load and validate a model artifact into the matching `PairwiseScorer` adapter."""
+    """Load and validate a pairwise artifact into the matching `PairwiseScorer` adapter."""
+    if spec.task != TASK_PAIRWISE_PLAGIARISM:
+        raise ValueError(
+            f"Pairwise loader rejected model '{spec.model_id}' for task '{spec.task}'."
+        )
+
     artifact_path = model_dir / spec.artifact
     if not artifact_path.is_file():
         raise FileNotFoundError(f"Missing artifact {artifact_path} for model '{spec.model_id}'")
@@ -285,7 +323,7 @@ def load_scorer(model_dir: Path, spec: ModelSpec) -> PairwiseScorer:
             smoothing_alpha=spec.smoothing_alpha,
         )
 
-    raise ValueError(f"Unsupported model kind '{spec.kind}' for model '{spec.model_id}'")
+    raise ValueError(f"Unsupported pairwise model kind '{spec.kind}' for model '{spec.model_id}'")
 
 
 def load_registered_model(
@@ -294,12 +332,16 @@ def load_registered_model(
     metadata_filename: str,
     expected_num_states: int,
 ) -> LoadedModel:
-    """Load metadata and artifact for one registered model and verify state dimensions."""
+    """Load metadata and artifact for one registered `pairwise_plagiarism` model."""
     metadata_path = model_dir / metadata_filename
     if not metadata_path.is_file():
         raise FileNotFoundError(f"Missing metadata file {metadata_path} for model '{model_id}'")
 
-    spec = load_model_spec(model_id=model_id, metadata_path=metadata_path)
+    spec = load_model_spec(
+        model_id=model_id,
+        metadata_path=metadata_path,
+        expected_task=TASK_PAIRWISE_PLAGIARISM,
+    )
     if spec.num_states != expected_num_states:
         raise ValueError(
             f"Model '{model_id}' num_states ({spec.num_states}) does not match "
@@ -333,17 +375,24 @@ def ensure_manifest_entry(
     model_id: str,
     metadata_filename: str,
     *,
+    task: str = TASK_PAIRWISE_PLAGIARISM,
     num_states: int = NUM_STATES,
     default_model: str | None = None,
-    tfidf_artifact: str = "tfidf_baseline.joblib",
+    tfidf_artifact: str | None = "tfidf_baseline.joblib",
     diagnostic_smoothing_alpha: float = DIAGNOSTIC_SMOOTHING_ALPHA,
 ) -> Path:
-    """Register or update `model_id` in `models/manifest.json` without clobbering siblings."""
+    """Register or update `model_id` in a task scoped `manifest.json` without clobbering siblings."""
+    validated_task = validate_task_name(task)
     manifest_path = models_dir / MANIFEST_FILENAME
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if not isinstance(manifest, dict):
             raise ValueError(f"Manifest {manifest_path} must contain a JSON object.")
+        existing_task = manifest.get("task")
+        if existing_task is not None and validate_task_name(str(existing_task)) != validated_task:
+            raise ValueError(
+                f"Manifest task ({existing_task}) conflicts with requested ({validated_task})."
+            )
         existing_states = manifest.get("num_states")
         if existing_states is not None and int(existing_states) != int(num_states):
             raise ValueError(
@@ -351,25 +400,29 @@ def ensure_manifest_entry(
             )
     else:
         manifest = {
+            "task": validated_task,
             "schema_version": MANIFEST_SCHEMA_VERSION,
             "default_model": default_model or model_id,
             "num_states": int(num_states),
             "diagnostic_smoothing_alpha": _validate_non_negative_finite(
                 "diagnostic_smoothing_alpha", diagnostic_smoothing_alpha
             ),
-            "tfidf_artifact": tfidf_artifact,
             "models": {},
         }
+        if tfidf_artifact is not None:
+            manifest["tfidf_artifact"] = tfidf_artifact
 
     models_map = dict(manifest.get("models", {}))
     models_map[model_id] = metadata_filename
+    manifest["task"] = validated_task
     manifest["schema_version"] = MANIFEST_SCHEMA_VERSION
     manifest["num_states"] = int(num_states)
     manifest["diagnostic_smoothing_alpha"] = _validate_non_negative_finite(
         "diagnostic_smoothing_alpha",
         manifest.get("diagnostic_smoothing_alpha", diagnostic_smoothing_alpha),
     )
-    manifest["tfidf_artifact"] = str(manifest.get("tfidf_artifact", tfidf_artifact))
+    if tfidf_artifact is not None and "tfidf_artifact" not in manifest:
+        manifest["tfidf_artifact"] = tfidf_artifact
     if default_model is not None:
         manifest["default_model"] = default_model
     elif not manifest.get("default_model"):
