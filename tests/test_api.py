@@ -154,7 +154,7 @@ def test_health_with_loaded_models(
                 "supported_languages": ["java"],
                 "available_models": [expected_descriptor],
             },
-            "ai_authorship": {
+            "ai_plagiarism": {
                 "model_loaded": False,
                 "default_model": None,
                 "model_version": "unknown",

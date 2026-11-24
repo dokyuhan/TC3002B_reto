@@ -1,4 +1,4 @@
-"""Single file AI authorship scorer protocol and task isolated loader."""
+"""Single file AI plagiarism scorer protocol and task isolated loader."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import numpy as np
 
 from src.models.registry import (
     DIAGNOSTIC_SMOOTHING_ALPHA,
-    TASK_AI_AUTHORSHIP,
+    TASK_AI_PLAGIARISM,
     ModelSpec,
     load_model_spec,
 )
@@ -19,7 +19,7 @@ from src.models.registry import (
 
 @dataclass(frozen=True)
 class SingleFileFeatures:
-    """Extracted single file AST and normalized source features for AI authorship scoring."""
+    """Extracted single file AST and normalized source features for AI plagiarism scoring."""
 
     states: np.ndarray
     norm_code: str
@@ -29,19 +29,19 @@ class SingleFileFeatures:
     diagnostic_smoothing_alpha: float = DIAGNOSTIC_SMOOTHING_ALPHA
 
 
-class AuthorshipScorer(Protocol):
-    """Protocol implemented by runtime single file AI authorship classifiers."""
+class AiPlagiarismScorer(Protocol):
+    """Protocol implemented by runtime single file AI plagiarism classifiers."""
 
     def predict_proba(self, features: SingleFileFeatures) -> float:
-        """Return probability in `[0.0, 1.0]` that the submission is AI authored."""
+        """Return probability in `[0.0, 1.0]` that the submission is AI generated."""
 
 
 @dataclass(frozen=True)
-class LoadedAuthorshipModel:
-    """Loaded single file authorship scorer composed with its validated `ModelSpec`."""
+class LoadedAiPlagiarismModel:
+    """Loaded single file AI plagiarism scorer composed with its validated `ModelSpec`."""
 
     spec: ModelSpec
-    scorer: AuthorshipScorer
+    scorer: AiPlagiarismScorer
 
     @property
     def model_id(self) -> str:
@@ -88,41 +88,41 @@ class LoadedAuthorshipModel:
         return self.spec.supported_languages
 
 
-AuthorshipScorerLoader = Callable[[Path, ModelSpec], AuthorshipScorer]
-_AUTHORSHIP_LOADERS: dict[str, AuthorshipScorerLoader] = {}
+AiPlagiarismScorerLoader = Callable[[Path, ModelSpec], AiPlagiarismScorer]
+_AI_PLAGIARISM_LOADERS: dict[str, AiPlagiarismScorerLoader] = {}
 
 
-def register_authorship_loader(kind: str, loader: AuthorshipScorerLoader) -> None:
-    """Register a loader function for a single file `ai_authorship` model kind."""
-    _AUTHORSHIP_LOADERS[str(kind).strip().lower()] = loader
+def register_ai_plagiarism_loader(kind: str, loader: AiPlagiarismScorerLoader) -> None:
+    """Register a loader function for a single file `ai_plagiarism` model kind."""
+    _AI_PLAGIARISM_LOADERS[str(kind).strip().lower()] = loader
 
 
-def load_authorship_scorer(model_dir: Path, spec: ModelSpec) -> AuthorshipScorer:
-    """Load and validate an `ai_authorship` artifact through the registered kind loader."""
-    if spec.task != TASK_AI_AUTHORSHIP:
+def load_ai_plagiarism_scorer(model_dir: Path, spec: ModelSpec) -> AiPlagiarismScorer:
+    """Load and validate an `ai_plagiarism` artifact through the registered kind loader."""
+    if spec.task != TASK_AI_PLAGIARISM:
         raise ValueError(
-            f"AI authorship loader rejected model '{spec.model_id}' for task '{spec.task}'."
+            f"AI plagiarism loader rejected model '{spec.model_id}' for task '{spec.task}'."
         )
 
     artifact_path = model_dir / spec.artifact
     if not artifact_path.is_file():
         raise FileNotFoundError(f"Missing artifact {artifact_path} for model '{spec.model_id}'")
 
-    loader = _AUTHORSHIP_LOADERS.get(spec.kind)
+    loader = _AI_PLAGIARISM_LOADERS.get(spec.kind)
     if loader is None:
         raise ValueError(
-            f"Unsupported ai_authorship model kind '{spec.kind}' for model '{spec.model_id}'."
+            f"Unsupported ai_plagiarism model kind '{spec.kind}' for model '{spec.model_id}'."
         )
     return loader(artifact_path, spec)
 
 
-def load_registered_authorship_model(
+def load_registered_ai_plagiarism_model(
     model_dir: Path,
     model_id: str,
     metadata_filename: str,
     expected_num_states: int,
-) -> LoadedAuthorshipModel:
-    """Load metadata and artifact for one registered `ai_authorship` model."""
+) -> LoadedAiPlagiarismModel:
+    """Load metadata and artifact for one registered `ai_plagiarism` model."""
     metadata_path = model_dir / metadata_filename
     if not metadata_path.is_file():
         raise FileNotFoundError(f"Missing metadata file {metadata_path} for model '{model_id}'")
@@ -130,7 +130,7 @@ def load_registered_authorship_model(
     spec = load_model_spec(
         model_id=model_id,
         metadata_path=metadata_path,
-        expected_task=TASK_AI_AUTHORSHIP,
+        expected_task=TASK_AI_PLAGIARISM,
     )
     if spec.num_states != expected_num_states:
         raise ValueError(
@@ -138,5 +138,5 @@ def load_registered_authorship_model(
             f"manifest num_states ({expected_num_states})"
         )
 
-    scorer = load_authorship_scorer(model_dir=model_dir, spec=spec)
-    return LoadedAuthorshipModel(spec=spec, scorer=scorer)
+    scorer = load_ai_plagiarism_scorer(model_dir=model_dir, spec=spec)
+    return LoadedAiPlagiarismModel(spec=spec, scorer=scorer)
