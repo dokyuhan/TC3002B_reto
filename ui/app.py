@@ -152,14 +152,17 @@ def request_prediction(
     code_b: str,
     language: str,
     operating_mode: str,
+    model: str | None = None,
 ) -> tuple[dict[str, Any] | None, int | None, str | None]:
     """Send POST /predict to the FastAPI backend and classify errors."""
-    payload = {
+    payload: dict[str, Any] = {
         "code_a": code_a,
         "code_b": code_b,
         "language": language,
         "operating_mode": operating_mode,
     }
+    if model is not None:
+        payload["model"] = model
     try:
         response = httpx.post(
             f"{api_url}/predict",
@@ -394,12 +397,18 @@ def _init_session_state() -> None:
         st.session_state["last_upload_b"] = None
     if "last_result" not in st.session_state:
         st.session_state["last_result"] = None
-    if "last_analysis_key" not in st.session_state:
-        st.session_state["last_analysis_key"] = None
+    if "last_pair_key" not in st.session_state:
+        st.session_state["last_pair_key"] = None
+    if "cached_pair_views" not in st.session_state:
+        st.session_state["cached_pair_views"] = None
+    if "last_predict_key" not in st.session_state:
+        st.session_state["last_predict_key"] = None
     if "last_error" not in st.session_state:
         st.session_state["last_error"] = None
     if "code_inputs_expanded" not in st.session_state:
         st.session_state["code_inputs_expanded"] = False
+    if "operating_mode_selector" not in st.session_state:
+        st.session_state["operating_mode_selector"] = "balanced"
 
 
 def _on_source_change() -> None:
@@ -482,37 +491,93 @@ def _render_api_status_row(color: str, tooltip: str) -> None:
 @st.fragment(run_every=3)
 def _poll_api_status_until_ready() -> None:
     """Auto refresh API status every 3 seconds while the backend is not ready."""
-    health, health_error = fetch_backend_health(API_URL)
+    pending = st.session_state.pop("_pending_health", None)
+    if pending is not None:
+        health, health_error = pending
+    else:
+        health, health_error = fetch_backend_health(API_URL)
     color, tooltip, is_green = _classify_health(health, health_error)
     _render_api_status_row(color, tooltip)
     if is_green:
         st.rerun()
 
 
-def _render_sidebar() -> str:
+def _render_sidebar() -> tuple[str, str | None, str, dict[str, str], bool]:
     """Render sidebar API status, controls, and conditional file uploaders."""
     health, health_error = fetch_backend_health(API_URL)
     color, tooltip, is_green = _classify_health(health, health_error)
-    supported_languages = (
-        health.get("supported_languages") if isinstance(health, dict) else None
-    ) or ["java"]
+
+    available_raw = health.get("available_models") if isinstance(health, dict) else None
+    available_models = [
+        item for item in (available_raw or []) if isinstance(item, dict) and item.get("id")
+    ]
+    default_model = (
+        str(health["default_model"])
+        if isinstance(health, dict) and health.get("default_model")
+        else None
+    )
+    model_by_id = {str(item["id"]): item for item in available_models}
+    model_labels = {
+        str(item["id"]): f"{item.get('display_name', item['id'])} (v{item.get('model_version', 'unknown')})"
+        for item in available_models
+    }
 
     with st.sidebar:
         if is_green:
             _render_api_status_row(color, tooltip)
         else:
+            st.session_state["_pending_health"] = (health, health_error)
             _poll_api_status_until_ready()
 
         st.divider()
         st.header("Controls")
 
-        language_options = list(dict.fromkeys(["java", *supported_languages]))
+        selected_model_id: str | None = None
+        if model_by_id:
+            model_ids = list(model_by_id.keys())
+            if default_model in model_ids:
+                model_ids = [default_model, *[mid for mid in model_ids if mid != default_model]]
+            current_model = st.session_state.get("model_selector")
+            if current_model not in model_ids:
+                st.session_state["model_selector"] = model_ids[0]
+            selected_model_id = st.selectbox(
+                "Model",
+                options=model_ids,
+                key="model_selector",
+                format_func=lambda mid: model_labels.get(mid, mid),
+                help="Select the pairwise plagiarism classifier used for scoring.",
+            )
+        else:
+            st.selectbox(
+                "Model",
+                options=["Default (waiting for API)"],
+                index=0,
+                disabled=True,
+                help="Available models populate once the backend is ready.",
+            )
+
+        selected_meta = model_by_id.get(selected_model_id) if selected_model_id else None
+        supported_languages = (
+            selected_meta.get("supported_languages")
+            if isinstance(selected_meta, dict) and selected_meta.get("supported_languages")
+            else (health.get("supported_languages") if isinstance(health, dict) else None)
+        ) or ["java"]
+
+        operating_mode = st.selectbox(
+            "Operating Mode",
+            options=["balanced", "low_fpr"],
+            key="operating_mode_selector",
+            format_func=lambda mode: "Balanced" if mode == "balanced" else "Low FPR",
+            help="Balanced maximizes F1; Low FPR targets <= 5% false positive rate.",
+        )
+
+        language_options = list(dict.fromkeys(supported_languages)) or ["java"]
         language = st.selectbox(
             "Language",
             options=language_options,
             index=0,
             format_func=lambda lang: lang.upper() if lang == "cpp" else lang.title(),
-            help="The model is calibrated for Java.",
+            help="Calibrated languages for the selected model.",
         )
 
         source_options = [
@@ -554,11 +619,16 @@ def _render_sidebar() -> str:
                     st.session_state["baseline_hash_b"] = _content_hash(decoded_b)
                     st.session_state["last_upload_b"] = upload_token_b
 
-    return language
+    return language, selected_model_id, operating_mode, model_labels, is_green
 
 
-def _render_verdict_kpi(prob: float, predicted_label: int) -> None:
-    """Render Verdict and Plagiarism Probability as native KPI metrics with colored values."""
+def _render_verdict_kpi(
+    prob: float,
+    predicted_label: int,
+    threshold_used: float,
+    model_label: str,
+) -> None:
+    """Render Verdict, Plagiarism Probability, active model, and decision threshold."""
     is_plag = predicted_label == 1
     verdict_text = "Plagiarized" if is_plag else "Clean"
     container_key = "primary_kpi_plag" if is_plag else "primary_kpi_clean"
@@ -583,6 +653,7 @@ def _render_verdict_kpi(prob: float, predicted_label: int) -> None:
         kpi_col_a, kpi_col_b = st.columns(2, gap="medium")
         kpi_col_a.metric("Verdict", verdict_text)
         kpi_col_b.metric("Plagiarism Probability", f"{prob * 100:.1f}%")
+    st.caption(f"Model: {model_label} | Decision threshold: {threshold_used * 100:.1f}%")
 
 
 def _format_metric_value(raw_value: float, fmt: str) -> str:
@@ -603,13 +674,29 @@ def _render_inline_hint(message: str, tone: str = "amber") -> None:
     )
 
 
-def _render_kpi_panel(kpi_slot: Any, result: dict[str, Any]) -> None:
-    """Render Verdict, Plagiarism Probability, and baseline KPI metrics into a slot."""
+def _render_kpi_panel(
+    kpi_slot: Any,
+    result: dict[str, Any],
+    model_labels: dict[str, str],
+) -> None:
+    """Render Verdict, Plagiarism Probability, threshold, and baseline KPI metrics into a slot."""
     prob = float(result.get("plagiarism_probability", 0.0))
     predicted_label = int(result.get("predicted_label", 0))
+    threshold_used = float(result.get("threshold_used", 0.5))
+    model_used = str(result.get("model_used", ""))
+    model_version = str(result.get("model_version", "unknown"))
+    model_label = model_labels.get(
+        model_used,
+        f"{model_used} (v{model_version})" if model_used else f"v{model_version}",
+    )
 
     with kpi_slot.container():
-        _render_verdict_kpi(prob=prob, predicted_label=predicted_label)
+        _render_verdict_kpi(
+            prob=prob,
+            predicted_label=predicted_label,
+            threshold_used=threshold_used,
+            model_label=model_label,
+        )
 
         for row_start in range(0, len(BASELINE_METRIC_SPECS), 2):
             row_cols = st.columns(2, gap="medium")
@@ -719,38 +806,51 @@ def _render_unavailable_placeholders(
     diff_slot.caption("Diff unavailable.")
 
 
-def _render_cached_results(
+def _fetch_and_render_kpi(
     kpi_slot: Any,
-    heatmap_slot: Any,
-    diff_slot: Any,
-    saved: dict[str, Any],
-) -> None:
-    """Render previously computed results into slots with spinners for heavy views."""
-    result = saved["result"]
-    _render_kpi_panel(kpi_slot, result)
+    code_a: str,
+    code_b: str,
+    language: str,
+    model_id: str | None,
+    operating_mode: str,
+    predict_key: Any,
+    model_labels: dict[str, str],
+) -> dict[str, Any] | None:
+    """Call POST /predict, update prediction cache state, and render KPI panel on success."""
+    result, status_code, error_detail = request_prediction(
+        api_url=API_URL,
+        code_a=code_a,
+        code_b=code_b,
+        language=language,
+        operating_mode=operating_mode,
+        model=model_id,
+    )
+    if result is not None:
+        st.session_state["last_predict_key"] = predict_key
+        st.session_state["last_result"] = {
+            "result": result,
+            "code_a": code_a,
+            "code_b": code_b,
+            "language": language,
+        }
+        st.session_state["last_error"] = None
+        _render_kpi_panel(kpi_slot, result, model_labels)
+        return result
 
-    heatmap_png = saved.get("heatmap_png")
-    if heatmap_png is None:
-        with heatmap_slot.spinner("Rendering transition heatmap..."):
-            heatmap_png = _render_heatmap_png(result)
-            saved["heatmap_png"] = heatmap_png
-            _paint_heatmap_panel(heatmap_slot, heatmap_png)
-    else:
-        _paint_heatmap_panel(heatmap_slot, heatmap_png)
-
-    with diff_slot.spinner("Preparing code diff..."):
-        diff_payload = _prepare_diff_payload(
-            saved["code_a"],
-            saved["code_b"],
-            saved.get("language", "java"),
-        )
-        _paint_diff_panel(diff_slot, diff_payload)
+    st.session_state["last_predict_key"] = None
+    st.session_state["last_result"] = None
+    st.session_state["last_error"] = (status_code, error_detail)
+    return None
 
 
 def _run_analysis_into_slots(
     code_a: str,
     code_b: str,
     language: str,
+    model_id: str | None,
+    operating_mode: str,
+    model_labels: dict[str, str],
+    backend_ready: bool,
     kpi_slot: Any,
     heatmap_slot: Any,
     diff_slot: Any,
@@ -758,7 +858,9 @@ def _run_analysis_into_slots(
     """Run prediction if inputs changed and populate section slots progressively."""
     if not code_a.strip() or not code_b.strip():
         st.session_state["last_result"] = None
-        st.session_state["last_analysis_key"] = None
+        st.session_state["last_pair_key"] = None
+        st.session_state["cached_pair_views"] = None
+        st.session_state["last_predict_key"] = None
         st.session_state["last_error"] = None
         _render_empty_placeholders(
             kpi_slot=kpi_slot,
@@ -769,56 +871,76 @@ def _run_analysis_into_slots(
         )
         return
 
-    analysis_key = (
-        _content_hash(code_a),
-        _content_hash(code_b),
-        language,
+    pair_key = (_content_hash(code_a), _content_hash(code_b), language)
+    predict_key = (pair_key, model_id, operating_mode)
+    pair_cached = (
+        pair_key == st.session_state.get("last_pair_key")
+        and st.session_state.get("cached_pair_views") is not None
     )
-    if analysis_key == st.session_state["last_analysis_key"]:
+
+    if predict_key == st.session_state.get("last_predict_key"):
         saved = st.session_state.get("last_result")
-        if saved is not None:
-            _render_cached_results(kpi_slot, heatmap_slot, diff_slot, saved)
-        else:
-            _render_unavailable_placeholders(kpi_slot, heatmap_slot, diff_slot)
+        if saved is not None and pair_cached:
+            views = st.session_state["cached_pair_views"]
+            _render_kpi_panel(kpi_slot, saved["result"], model_labels)
+            _paint_heatmap_panel(heatmap_slot, views["heatmap_png"])
+            _paint_diff_panel(diff_slot, views["diff_payload"])
+            return
+
+    if not backend_ready:
+        st.session_state["last_predict_key"] = None
+        st.session_state["last_result"] = None
+        st.session_state["last_error"] = (503, "Model service is warming up or unavailable.")
+        _render_unavailable_placeholders(kpi_slot, heatmap_slot, diff_slot)
+        return
+
+    if pair_cached:
+        views = st.session_state["cached_pair_views"]
+        _paint_heatmap_panel(heatmap_slot, views["heatmap_png"])
+        _paint_diff_panel(diff_slot, views["diff_payload"])
+        with kpi_slot.spinner("Computing analysis metrics..."):
+            result = _fetch_and_render_kpi(
+                kpi_slot=kpi_slot,
+                code_a=code_a,
+                code_b=code_b,
+                language=language,
+                model_id=model_id,
+                operating_mode=operating_mode,
+                predict_key=predict_key,
+                model_labels=model_labels,
+            )
+            if result is None:
+                kpi_slot.caption("Metrics unavailable.")
         return
 
     result: dict[str, Any] | None = None
-    status_code: int | None = None
-    error_detail: str | None = None
-
     with diff_slot.spinner("Preparing code diff..."):
         with heatmap_slot.spinner("Rendering transition heatmap..."):
             with kpi_slot.spinner("Computing analysis metrics..."):
-                result, status_code, error_detail = request_prediction(
-                    api_url=API_URL,
+                result = _fetch_and_render_kpi(
+                    kpi_slot=kpi_slot,
                     code_a=code_a,
                     code_b=code_b,
                     language=language,
-                    operating_mode="balanced",
+                    model_id=model_id,
+                    operating_mode=operating_mode,
+                    predict_key=predict_key,
+                    model_labels=model_labels,
                 )
 
-                st.session_state["last_analysis_key"] = analysis_key
-                if result is not None:
-                    st.session_state["last_result"] = {
-                        "result": result,
-                        "code_a": code_a,
-                        "code_b": code_b,
-                        "language": language,
-                    }
-                    st.session_state["last_error"] = None
-                    _render_kpi_panel(kpi_slot, result)
-                else:
-                    st.session_state["last_result"] = None
-                    st.session_state["last_error"] = (status_code, error_detail)
-
+            heatmap_png: bytes | None = None
             if result is not None:
                 heatmap_png = _render_heatmap_png(result)
-                st.session_state["last_result"]["heatmap_png"] = heatmap_png
                 _paint_heatmap_panel(heatmap_slot, heatmap_png)
 
         if result is not None:
             diff_payload = _prepare_diff_payload(code_a, code_b, language)
             _paint_diff_panel(diff_slot, diff_payload)
+            st.session_state["last_pair_key"] = pair_key
+            st.session_state["cached_pair_views"] = {
+                "heatmap_png": heatmap_png,
+                "diff_payload": diff_payload,
+            }
 
     if result is None:
         _render_unavailable_placeholders(kpi_slot, heatmap_slot, diff_slot)
@@ -832,7 +954,7 @@ def main() -> None:
     )
     _init_session_state()
 
-    language = _render_sidebar()
+    language, model_id, operating_mode, model_labels, backend_ready = _render_sidebar()
 
     st.title("Code Plagiarism Detector")
 
@@ -880,6 +1002,10 @@ def main() -> None:
         code_a=code_a,
         code_b=code_b,
         language=language,
+        model_id=model_id,
+        operating_mode=operating_mode,
+        model_labels=model_labels,
+        backend_ready=backend_ready,
         kpi_slot=kpi_slot,
         heatmap_slot=heatmap_slot,
         diff_slot=diff_slot,

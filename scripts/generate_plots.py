@@ -1,6 +1,6 @@
 """Generate publication quality evaluation plots from metrics_summary.json.
 
-Reads strictly from docs/evaluation/metrics_summary.json and outputs 5 PNG
+Reads strictly from docs/evaluation/metrics_summary.json and outputs up to 7 PNG
 figures into docs/evaluation/figures/ using the non-interactive matplotlib Agg backend.
 """
 
@@ -401,7 +401,7 @@ def plot_boilerplate_ablation(data: dict[str, Any], out_path: Path) -> None:
         x + width / 2,
         v1_f1,
         width,
-        label="ConPlag v1 (Zero-Shot F1)",
+        label="ConPlag v1 (5-Fold OOF F1)",
         color="#62b6cb",
         edgecolor="#1b4965",
         linewidth=0.7,
@@ -419,9 +419,10 @@ def plot_boilerplate_ablation(data: dict[str, Any], out_path: Path) -> None:
             fontweight="bold",
         )
 
+    best_abs_shift = min(abs(s) for s in shifts)
     for idx, shift_val in enumerate(shifts):
         top_y = max(v2_f1[idx], v1_f1[idx]) + 0.06
-        badge_color = "#2a9d8f" if idx == 0 else "#c1121f"
+        badge_color = "#2a9d8f" if abs(shift_val) <= best_abs_shift + 1e-12 else "#c1121f"
         ax_left.annotate(
             f"Shift: {shift_val * 100:+.2f}%",
             xy=(x[idx], top_y),
@@ -485,7 +486,8 @@ def plot_boilerplate_ablation(data: dict[str, Any], out_path: Path) -> None:
 
     ax_right.set_xticks(x_m)
     ax_right.set_xticklabels(short_labels)
-    ax_right.set_ylim(-13.2, 1.2)
+    min_shift = min(shifts_t + shifts_f)
+    ax_right.set_ylim(min(min_shift - 2.2, -13.5), 1.2)
     ax_right.set_ylabel("Cross-Domain F1 Shift: (v1 - v2) in Percentage Points")
     ax_right.set_title("Cross-Domain F1 Drop Across All Models (Closer to 0% is Better)")
     ax_right.legend(loc="lower right", fontsize=8.5)
@@ -503,10 +505,10 @@ def plot_confusion_matrices(data: dict[str, Any], out_path: Path) -> None:
     lgbm_ir = data["ir_plag_zero_shot"]["pairwise_lgbm"]["at_threshold"]
 
     panels = [
-        ("ConPlag v2 OOF\n(Balanced, thr=0.3555)", lgbm_v2_bal),
-        ("ConPlag v2 OOF\n(Low-FPR, thr=0.5210)", lgbm_v2_low),
-        ("ConPlag v1 Zero-Shot\n(strip=True, thr=0.3555)", lgbm_v1),
-        ("IR-Plag Zero-Shot\n(Balanced, thr=0.3555)", lgbm_ir),
+        (f"ConPlag v2 OOF\n(Balanced, thr={lgbm_v2_bal['threshold']:.4f})", lgbm_v2_bal),
+        (f"ConPlag v2 OOF\n(Low-FPR, thr={lgbm_v2_low['threshold']:.4f})", lgbm_v2_low),
+        (f"ConPlag v1 5-Fold OOF\n(strip=True, thr={lgbm_v1['threshold']:.4f})", lgbm_v1),
+        (f"IR-Plag Zero-Shot\n(Balanced, thr={lgbm_ir['threshold']:.4f})", lgbm_ir),
     ]
 
     fig, axes = plt.subplots(1, 4, figsize=(15.2, 4.3))
@@ -666,8 +668,85 @@ def plot_model_comparison(data: dict[str, Any], out_path: Path) -> None:
     plt.close(fig)
 
 
+def plot_cnn_vs_lgbm_held_out(data: dict[str, Any], out_path: Path) -> None:
+    """Plot held out Fold 4 ConPlag v2 and Zero Shot IR Plag comparison for LightGBM vs CNN."""
+    held_out = data.get("held_out_cnn_comparison")
+    if not isinstance(held_out, dict) or not isinstance(held_out.get("models"), dict):
+        return
+
+    models = held_out["models"]
+    lgbm = models["pairwise_lgbm_3fold"]
+    cnn = models["pairwise_cnn"]
+
+    metrics_keys = ("f1", "precision", "recall", "roc_auc", "fpr")
+    metric_labels = ("F1", "Precision", "Recall", "ROC AUC", "FPR")
+
+    fig, axes = plt.subplots(1, 2, figsize=(12.2, 4.8), sharey=True)
+    x = np.arange(len(metrics_keys))
+    width = 0.36
+
+    panels = (
+        (axes[0], "conplag_v2_fold4", f"ConPlag v2 Unseen Fold 4 (n={held_out['n_test']})"),
+        (axes[1], "ir_plag", f"IR Plag Zero Shot (n={held_out['n_ir_plag']})"),
+    )
+
+    for ax, split_key, title in panels:
+        lgbm_vals = [float(lgbm[split_key][k]) for k in metrics_keys]
+        cnn_vals = [float(cnn[split_key][k]) for k in metrics_keys]
+
+        bars_lgbm = ax.bar(
+            x - width / 2,
+            lgbm_vals,
+            width,
+            label="Pairwise LightGBM (3 Fold)",
+            color="#1b4965",
+            edgecolor="#222222",
+            linewidth=0.6,
+        )
+        bars_cnn = ax.bar(
+            x + width / 2,
+            cnn_vals,
+            width,
+            label="Pairwise CNN (Exported)",
+            color="#d97706",
+            edgecolor="#222222",
+            linewidth=0.6,
+        )
+        for bars in (bars_lgbm, bars_cnn):
+            for bar in bars:
+                val = bar.get_height()
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    val + 0.015,
+                    f"{val * 100:.1f}%",
+                    ha="center",
+                    va="bottom",
+                    fontsize=7.6,
+                    fontweight="bold",
+                )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(metric_labels)
+        ax.set_ylim(0.0, 1.12)
+        ax.set_title(title)
+        ax.grid(axis="y", alpha=0.3)
+
+    axes[0].set_ylabel("Score")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.93), ncol=2, frameon=False)
+    fig.suptitle(
+        "Held Out Same Split Comparison: Pairwise LightGBM vs Pairwise CNN (Trained on Folds 0, 1, 2)",
+        fontsize=12.0,
+        fontweight="bold",
+        y=0.98,
+    )
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.89))
+    fig.savefig(out_path, dpi=DPI)
+    plt.close(fig)
+
+
 def main() -> None:
-    """Load metrics_summary.json and render all 6 evaluation figures."""
+    """Load metrics_summary.json and render all evaluation figures."""
     if not METRICS_PATH.is_file():
         raise FileNotFoundError(f"Metrics file not found: {METRICS_PATH}")
 
@@ -685,6 +764,8 @@ def main() -> None:
         (FIGURES_DIR / "boilerplate_ablation.png", plot_boilerplate_ablation),
         (FIGURES_DIR / "confusion_matrices.png", plot_confusion_matrices),
     ]
+    if isinstance(data.get("held_out_cnn_comparison"), dict):
+        outputs.append((FIGURES_DIR / "cnn_vs_lgbm_held_out.png", plot_cnn_vs_lgbm_held_out))
 
     for out_path, plot_fn in outputs:
         plot_fn(data, out_path)
