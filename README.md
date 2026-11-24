@@ -108,7 +108,7 @@ uv run --group train python -m model_training.main evaluate --ir-plag
 uv run --group train python -m model_training.export_numpy
 
 # 6. Check that the app and PyTorch agree
-uv run --group train python -m pytest model_training/tests
+uv run --group train python -m pytest tests/test_numpy_parity.py
 ```
 
 Run step 5 after every retraining, otherwise the app keeps serving the old weights. All hyperparameters live in `model_training/config.py`. Metrics are written to `dataset/results/`. The TF-IDF baseline is fitted separately with `uv run python -m scripts.fit_tfidf`.

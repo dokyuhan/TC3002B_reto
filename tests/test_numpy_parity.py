@@ -1,8 +1,11 @@
-"""La CNN de torch (entrenamiento) y la de numpy (app) deben dar la misma salida con los mismos pesos.
+"""Verify numerical parity between PyTorch `PlagiarismCNN` and NumPy `NumpyCnnClassifier`.
 
-Requiere torch; se omite si no está instalado (el CI de la app no lo instala).
-Ejecutar desde la raíz:  python -m pytest model_training/tests
+Requires PyTorch; skipped automatically when torch is not installed in the environment.
+Run with: `uv run --group train pytest tests/test_numpy_parity.py`
 """
+
+from __future__ import annotations
+
 import numpy as np
 import pytest
 
@@ -14,8 +17,8 @@ from src.models.cnn_numpy import NumpyCnnClassifier  # noqa: E402
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2])
-def test_numpy_forward_matches_torch(tmp_path, seed):
-    """Con pesos aleatorios y entradas aleatorias, los logits de numpy coinciden con los de torch."""
+def test_numpy_forward_matches_torch(tmp_path, seed: int) -> None:
+    """NumPy forward logits match PyTorch eval logits for identical exported weights."""
     torch.manual_seed(seed)
     model = PlagiarismCNN(in_channels=3, n_states=12).eval()
     path = tmp_path / "cnn_weights.npz"

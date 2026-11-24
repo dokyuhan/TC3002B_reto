@@ -111,6 +111,42 @@ def test_load_round_trip_and_bad_shapes(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Missing CNN weights"):
         NumpyCnnClassifier({"conv1_w": weights["conv1_w"]}, n_states=K)
 
+    bad_fc1 = dict(weights)
+    bad_fc1["fc1_w"] = np.zeros((64, 10), dtype=np.float32)
+    with pytest.raises(ValueError, match="Invalid fc1_w shape"):
+        NumpyCnnClassifier(bad_fc1, n_states=K)
+
+    bad_conv2 = dict(weights)
+    bad_conv2["conv2_w"] = np.zeros((64, 99, 3, 3), dtype=np.float32)
+    with pytest.raises(ValueError, match="Invalid conv2_w shape"):
+        NumpyCnnClassifier(bad_conv2, n_states=K)
+
+    incomplete_npz = tmp_path / "incomplete.npz"
+    np.savez(incomplete_npz, conv1_w=weights["conv1_w"], n_states=np.int64(K), pool_size=np.int64(4))
+    with pytest.raises(ValueError, match="Missing CNN weights"):
+        NumpyCnnClassifier.load(incomplete_npz)
+
+
+def test_empty_batch_and_extreme_logit_stability() -> None:
+    """Empty batches return empty arrays and extreme negative logits avoid overflow warnings."""
+    clf = NumpyCnnClassifier(_random_weights(), n_states=K)
+    empty_x = np.empty((0, 3, K, K), dtype=np.float32)
+    empty_p = np.empty((0, K, K), dtype=np.float32)
+    assert clf.predict_logits(empty_x).shape == (0,)
+    assert clf.predict_pairs(empty_p, empty_p).shape == (0,)
+
+    with pytest.raises(ValueError, match="Expected matching"):
+        clf.predict_pairs(
+            np.empty((0, 5, 5), dtype=np.float32),
+            np.empty((0, 5, 5), dtype=np.float32),
+        )
+
+    extreme = np.full((1, 3, K, K), 1e4, dtype=np.float32)
+    probs = clf.predict_proba_tensor(extreme)
+    assert probs.shape == (1,)
+    assert np.isfinite(probs).all()
+    assert 0.0 <= float(probs[0]) <= 1.0
+
 
 @pytest.fixture()
 def cnn_model_dir(tmp_path: Path) -> Path:
