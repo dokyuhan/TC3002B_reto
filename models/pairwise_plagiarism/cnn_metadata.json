@@ -1,4 +1,5 @@
 {
+  "task": "pairwise_plagiarism",
   "kind": "cnn",
   "display_name": "Pairwise CNN",
   "artifact": "cnn_weights.npz",

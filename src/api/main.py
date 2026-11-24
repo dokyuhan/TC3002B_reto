@@ -1,4 +1,4 @@
-"""FastAPI HTTP transport layer for structural code plagiarism detection."""
+"""FastAPI HTTP transport layer separating pairwise plagiarism and AI authorship endpoints."""
 
 from __future__ import annotations
 
@@ -12,13 +12,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.inference import (
+    AuthorshipBundle,
     InvalidInputError,
     ModelBundle,
     ModelNotLoadedError,
+    ServiceBundle,
+    analyze_authorship,
     analyze_pair,
-    load_model_bundle,
+    load_service_bundle,
     resolve_model_dir,
 )
+from src.models.registry import TASK_AI_AUTHORSHIP, TASK_PAIRWISE_PLAGIARISM
 
 
 class ModelDescriptor(BaseModel):
@@ -32,6 +36,16 @@ class ModelDescriptor(BaseModel):
     threshold_low_fpr: float
 
 
+class TaskHealth(BaseModel):
+    """Readiness and available model inventory for one inference task."""
+
+    model_loaded: bool
+    default_model: str | None = None
+    model_version: str = "unknown"
+    supported_languages: list[str] = Field(default_factory=list)
+    available_models: list[ModelDescriptor] = Field(default_factory=list)
+
+
 class HealthResponse(BaseModel):
     """Response schema for GET /health."""
 
@@ -41,10 +55,11 @@ class HealthResponse(BaseModel):
     model_version: str
     default_model: str | None = None
     available_models: list[ModelDescriptor] = Field(default_factory=list)
+    tasks: dict[str, TaskHealth] = Field(default_factory=dict)
 
 
 class PredictRequest(BaseModel):
-    """Request schema for POST /predict."""
+    """Request schema for POST /predict/pairwise_plagiarism and legacy POST /predict."""
 
     code_a: str
     code_b: str
@@ -54,7 +69,7 @@ class PredictRequest(BaseModel):
 
 
 class PredictResponse(BaseModel):
-    """Response schema for POST /predict."""
+    """Response schema for POST /predict/pairwise_plagiarism and legacy POST /predict."""
 
     model_used: str
     model_version: str
@@ -75,17 +90,45 @@ class PredictResponse(BaseModel):
     transition_delta: list[list[float]]
 
 
+class AuthorshipPredictRequest(BaseModel):
+    """Request schema for single file POST /predict/ai_authorship."""
+
+    code: str
+    language: Literal["java", "python", "cpp"] = "java"
+    operating_mode: Literal["balanced", "low_fpr"] = "balanced"
+    model: str | None = None
+
+
+class AuthorshipPredictResponse(BaseModel):
+    """Response schema for single file POST /predict/ai_authorship."""
+
+    model_used: str
+    model_version: str
+    ai_probability: float
+    predicted_label: int
+    threshold_used: float
+    perplexity: float
+    ast_tokens: int
+    parse_warnings: bool
+    state_names: list[str]
+    transition_matrix: list[list[float]]
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-    """Load trained artifacts once on startup and clear references on shutdown."""
-    application.state.bundle = load_model_bundle(resolve_model_dir())
+    """Load isolated task bundles once on startup and clear references on shutdown."""
+    service = load_service_bundle(resolve_model_dir())
+    application.state.service = service
+    application.state.bundle = service.pairwise_plagiarism
     yield
-    application.state.bundle = ModelBundle(model_loaded=False)
+    empty = ServiceBundle()
+    application.state.service = empty
+    application.state.bundle = empty.pairwise_plagiarism
 
 
 app = FastAPI(
-    title="Structural Code Plagiarism Detector API",
-    version="0.1.0",
+    title="Structural Code Plagiarism and AI Authorship API",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -98,18 +141,18 @@ app.add_middleware(
 )
 
 
-def _get_bundle(request: Request) -> ModelBundle:
-    """Return initialized model bundle from FastAPI app.state."""
+def _get_service(request: Request) -> ServiceBundle:
+    """Return initialized multi task service bundle from FastAPI app.state."""
+    service = getattr(request.app.state, "service", None)
+    if isinstance(service, ServiceBundle):
+        return service
     bundle = getattr(request.app.state, "bundle", None)
     if isinstance(bundle, ModelBundle):
-        return bundle
-    return ModelBundle(model_loaded=False)
+        return ServiceBundle(pairwise_plagiarism=bundle)
+    return ServiceBundle()
 
 
-@app.get("/health", response_model=HealthResponse)
-def health(request: Request) -> HealthResponse:
-    """Report service health, model readiness, available models, and calibrated languages."""
-    bundle = _get_bundle(request)
+def _build_task_health(bundle: ModelBundle | AuthorshipBundle) -> TaskHealth:
     descriptors = [
         ModelDescriptor(
             id=loaded.model_id,
@@ -121,20 +164,17 @@ def health(request: Request) -> HealthResponse:
         )
         for loaded in bundle.models.values()
     ]
-    return HealthResponse(
-        status="ok",
+    return TaskHealth(
         model_loaded=bundle.model_loaded,
-        supported_languages=list(bundle.supported_languages),
-        model_version=bundle.model_version,
         default_model=bundle.default_model if bundle.model_loaded else None,
+        model_version=bundle.model_version,
+        supported_languages=list(bundle.supported_languages),
         available_models=descriptors if bundle.model_loaded else [],
     )
 
 
-@app.post("/predict", response_model=PredictResponse)
-def predict(payload: PredictRequest, request: Request) -> PredictResponse:
-    """Evaluate pairwise structural plagiarism strictly in memory."""
-    bundle = _get_bundle(request)
+def _predict_pairwise(payload: PredictRequest, request: Request) -> PredictResponse:
+    bundle = _get_service(request).pairwise_plagiarism
     try:
         analysis = analyze_pair(
             bundle=bundle,
@@ -150,3 +190,58 @@ def predict(payload: PredictRequest, request: Request) -> PredictResponse:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return PredictResponse(**asdict(analysis))
+
+
+@app.get("/health", response_model=HealthResponse)
+def health(request: Request) -> HealthResponse:
+    """Report service health, per task readiness, and available model inventories."""
+    service = _get_service(request)
+    pairwise_health = _build_task_health(service.pairwise_plagiarism)
+    authorship_health = _build_task_health(service.ai_authorship)
+    return HealthResponse(
+        status="ok",
+        model_loaded=pairwise_health.model_loaded,
+        supported_languages=pairwise_health.supported_languages,
+        model_version=pairwise_health.model_version,
+        default_model=pairwise_health.default_model,
+        available_models=pairwise_health.available_models,
+        tasks={
+            TASK_PAIRWISE_PLAGIARISM: pairwise_health,
+            TASK_AI_AUTHORSHIP: authorship_health,
+        },
+    )
+
+
+@app.post("/predict/pairwise_plagiarism", response_model=PredictResponse)
+def predict_pairwise_plagiarism(payload: PredictRequest, request: Request) -> PredictResponse:
+    """Evaluate pairwise structural plagiarism strictly in memory."""
+    return _predict_pairwise(payload, request)
+
+
+@app.post("/predict", response_model=PredictResponse)
+def predict(payload: PredictRequest, request: Request) -> PredictResponse:
+    """Backward compatible alias for POST /predict/pairwise_plagiarism."""
+    return _predict_pairwise(payload, request)
+
+
+@app.post("/predict/ai_authorship", response_model=AuthorshipPredictResponse)
+def predict_ai_authorship(
+    payload: AuthorshipPredictRequest,
+    request: Request,
+) -> AuthorshipPredictResponse:
+    """Evaluate single file AI authorship strictly in memory."""
+    bundle = _get_service(request).ai_authorship
+    try:
+        analysis = analyze_authorship(
+            bundle=bundle,
+            code=payload.code,
+            language=payload.language,
+            operating_mode=payload.operating_mode,
+            model_id=payload.model,
+        )
+    except ModelNotLoadedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except InvalidInputError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return AuthorshipPredictResponse(**asdict(analysis))

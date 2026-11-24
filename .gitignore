@@ -26,12 +26,12 @@ build/
 # Generated data & model training artifacts
 *.npz
 !dataset/preprocessed/*.npz
-!models/cnn_weights.npz
+!models/**/*.npz
 *.npy
 *.parquet
 !dataset/preprocessed/*.parquet
 *.joblib
-!models/*.joblib
+!models/**/*.joblib
 *.pt
 *.pth
 dataset/processed/

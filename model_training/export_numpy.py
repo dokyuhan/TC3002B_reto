@@ -16,9 +16,13 @@ from model_training.data.data_loader import load_split
 from model_training.network.checkpoints import load_checkpoint, normalize_state_dict
 from model_training.training.metrics import compute_metrics
 from src.models.cnn_numpy import NumpyCnnClassifier
-from src.models.registry import ensure_manifest_entry, write_model_metadata
+from src.models.registry import (
+    TASK_PAIRWISE_PLAGIARISM,
+    ensure_manifest_entry,
+    write_model_metadata,
+)
 
-MODELS_DIR = config.ROOT / "models"
+MODELS_DIR = config.ROOT / "models" / TASK_PAIRWISE_PLAGIARISM
 MAX_BUNDLE_BYTES = 1_048_576  # 1 MB per model artifact set
 # Fixed 0.50 operating point documented for uncalibrated CNN probabilities.
 BALANCED_THRESHOLD = 0.5
@@ -109,6 +113,7 @@ def main() -> None:
     meta_path = MODELS_DIR / meta_filename
     n_states = int(ckpt["model_config"]["n_states"])
     meta: dict[str, object] = {
+        "task": TASK_PAIRWISE_PLAGIARISM,
         "kind": "cnn",
         "display_name": "Pairwise CNN",
         "artifact": weights_path.name,
@@ -126,6 +131,7 @@ def main() -> None:
         MODELS_DIR,
         model_id="cnn",
         metadata_filename=meta_filename,
+        task=TASK_PAIRWISE_PLAGIARISM,
         num_states=n_states,
     )
     total_bytes = weights_path.stat().st_size + meta_path.stat().st_size

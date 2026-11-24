@@ -44,7 +44,7 @@ dataset/results/history.json                      loss and metrics per epoch
 dataset/results/test_metrics.json, ir_plag_metrics.json
         |  export_numpy.py
         v
-models/cnn_weights.npz + models/cnn_metadata.json    registered in models/manifest.json
+models/pairwise_plagiarism/cnn_weights.npz + cnn_metadata.json    registered in models/pairwise_plagiarism/manifest.json
 ```
 
 **Data splits.**
@@ -226,7 +226,7 @@ The baseline uses the default settings and no tuning. It shows how much of the r
 |---|---|
 | `export_weights(state, model_config, path)` | Saves the layer weights from the PyTorch model into `cnn_weights.npz`. |
 | `low_fpr_threshold(y, probs)` | The lowest threshold, at or above 0.5, with a validation false positive rate of 5% or less. |
-| `main()` | Exports the weights, checks that numpy and PyTorch match (stops if they differ by more than 1e-4), evaluates the version the app uses (probabilities averaged over `(A, B)` and `(B, A)`), writes `models/cnn_metadata.json`, and registers the model in `models/manifest.json`. |
+| `main()` | Exports the weights, checks that numpy and PyTorch match (stops if they differ by more than 1e-4), evaluates the version the app uses (probabilities averaged over `(A, B)` and `(B, A)`), writes `models/pairwise_plagiarism/cnn_metadata.json`, and registers the model in `models/pairwise_plagiarism/manifest.json`. |
 
 ### `tests/test_numpy_parity.py`
 

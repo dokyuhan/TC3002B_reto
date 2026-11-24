@@ -14,7 +14,7 @@ from src.models.classifier import PairwisePlagiarismClassifier
 from src.models.registry import ensure_manifest_entry, write_model_metadata
 from src.vocabulary import NUM_STATES
 
-REPO_MODELS = Path(__file__).resolve().parents[1] / "models"
+REPO_MODELS = Path(__file__).resolve().parents[1] / "models" / "pairwise_plagiarism"
 
 JAVA_A = """
 public class A {
