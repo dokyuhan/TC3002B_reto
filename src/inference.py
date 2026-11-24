@@ -1,4 +1,4 @@
-"""Cohesive runtime inference facade separating pairwise plagiarism and AI authorship tasks."""
+"""Cohesive runtime inference facade separating pairwise plagiarism and AI plagiarism tasks."""
 
 from __future__ import annotations
 
@@ -13,10 +13,10 @@ from typing import Literal
 import joblib
 
 from src.features.markov import pair_to_tensor, sequence_to_transition_matrix
-from src.models.authorship import (
-    LoadedAuthorshipModel,
+from src.models.ai_plagiarism import (
+    LoadedAiPlagiarismModel,
     SingleFileFeatures,
-    load_registered_authorship_model,
+    load_registered_ai_plagiarism_model,
 )
 from src.models.baseline import (
     TfidfCosineBaseline,
@@ -27,7 +27,7 @@ from src.models.baseline import (
 from src.models.registry import (
     DIAGNOSTIC_SMOOTHING_ALPHA,
     MANIFEST_FILENAME,
-    TASK_AI_AUTHORSHIP,
+    TASK_AI_PLAGIARISM,
     TASK_PAIRWISE_PLAGIARISM,
     LoadedModel,
     PairFeatures,
@@ -81,31 +81,31 @@ class ModelBundle:
 
 
 @dataclass(frozen=True)
-class AuthorshipBundle:
-    """In memory bundle of registered single file `ai_authorship` models."""
+class AiPlagiarismBundle:
+    """In memory bundle of registered single file `ai_plagiarism` models."""
 
     model_loaded: bool = False
-    models: dict[str, LoadedAuthorshipModel] = field(default_factory=dict)
+    models: dict[str, LoadedAiPlagiarismModel] = field(default_factory=dict)
     default_model: str | None = None
     diagnostic_smoothing_alpha: float = DIAGNOSTIC_SMOOTHING_ALPHA
     num_states: int = NUM_STATES
 
     @property
-    def active_model(self) -> LoadedAuthorshipModel | None:
-        """Return the loaded default authorship model, or None when unloaded."""
+    def active_model(self) -> LoadedAiPlagiarismModel | None:
+        """Return the loaded default AI plagiarism model, or None when unloaded."""
         if self.default_model is None:
             return None
         return self.models.get(self.default_model)
 
     @property
     def model_version(self) -> str:
-        """Return the default authorship model version string, or 'unknown'."""
+        """Return the default AI plagiarism model version string, or 'unknown'."""
         active = self.active_model
         return active.model_version if active is not None else "unknown"
 
     @property
     def supported_languages(self) -> tuple[str, ...]:
-        """Return calibrated languages for the default authorship model, or empty tuple."""
+        """Return calibrated languages for the default AI plagiarism model, or empty tuple."""
         active = self.active_model
         return active.supported_languages if active is not None else ()
 
@@ -115,7 +115,7 @@ class ServiceBundle:
     """Top level runtime container holding isolated bundles for each supported task."""
 
     pairwise_plagiarism: ModelBundle = field(default_factory=ModelBundle)
-    ai_authorship: AuthorshipBundle = field(default_factory=AuthorshipBundle)
+    ai_plagiarism: AiPlagiarismBundle = field(default_factory=AiPlagiarismBundle)
 
 
 @dataclass(frozen=True)
@@ -142,8 +142,8 @@ class PairAnalysis:
 
 
 @dataclass(frozen=True)
-class AuthorshipAnalysis:
-    """Structured `ai_authorship` analysis result for a single source code file."""
+class AiPlagiarismAnalysis:
+    """Structured `ai_plagiarism` analysis result for a single source code file."""
 
     model_used: str
     model_version: str
@@ -302,34 +302,34 @@ def load_model_bundle(model_dir: Path) -> ModelBundle:
     )
 
 
-def load_authorship_bundle(model_dir: Path) -> AuthorshipBundle:
-    """Load `ai_authorship` models from `<model_dir>/ai_authorship` without crashing startup."""
-    nested = model_dir / TASK_AI_AUTHORSHIP
+def load_ai_plagiarism_bundle(model_dir: Path) -> AiPlagiarismBundle:
+    """Load `ai_plagiarism` models from `<model_dir>/ai_plagiarism` without crashing startup."""
+    nested = model_dir / TASK_AI_PLAGIARISM
     if (nested / MANIFEST_FILENAME).is_file():
         task_dir = nested
     elif (model_dir / MANIFEST_FILENAME).is_file():
         try:
             raw = json.loads((model_dir / MANIFEST_FILENAME).read_text(encoding="utf-8"))
         except Exception:
-            return AuthorshipBundle(model_loaded=False)
-        if not isinstance(raw, dict) or raw.get("task") != TASK_AI_AUTHORSHIP:
-            return AuthorshipBundle(model_loaded=False)
+            return AiPlagiarismBundle(model_loaded=False)
+        if not isinstance(raw, dict) or raw.get("task") != TASK_AI_PLAGIARISM:
+            return AiPlagiarismBundle(model_loaded=False)
         task_dir = model_dir
     else:
-        return AuthorshipBundle(model_loaded=False)
+        return AiPlagiarismBundle(model_loaded=False)
 
     try:
-        parsed = _parse_manifest_header(task_dir, TASK_AI_AUTHORSHIP)
+        parsed = _parse_manifest_header(task_dir, TASK_AI_PLAGIARISM)
         if parsed is None:
-            return AuthorshipBundle(model_loaded=False)
+            return AiPlagiarismBundle(model_loaded=False)
         manifest, num_states, diagnostic_alpha = parsed
         models_map = manifest.get("models")
         if not isinstance(models_map, dict):
             raise ValueError("Manifest 'models' must be a mapping.")
         default_raw = manifest.get("default_model")
         if not models_map or default_raw is None:
-            logger.info("No ai_authorship models registered in %s.", task_dir)
-            return AuthorshipBundle(
+            logger.info("No ai_plagiarism models registered in %s.", task_dir)
+            return AiPlagiarismBundle(
                 model_loaded=False,
                 diagnostic_smoothing_alpha=diagnostic_alpha,
                 num_states=num_states,
@@ -340,13 +340,13 @@ def load_authorship_bundle(model_dir: Path) -> AuthorshipBundle:
                 f"Manifest default_model '{default_model}' is missing from registered models."
             )
     except Exception as exc:
-        logger.warning("Failed to parse ai_authorship manifest in %s: %s", task_dir, exc)
-        return AuthorshipBundle(model_loaded=False)
+        logger.warning("Failed to parse ai_plagiarism manifest in %s: %s", task_dir, exc)
+        return AiPlagiarismBundle(model_loaded=False)
 
-    loaded_models: dict[str, LoadedAuthorshipModel] = {}
+    loaded_models: dict[str, LoadedAiPlagiarismModel] = {}
     for model_id, metadata_filename in models_map.items():
         try:
-            loaded = load_registered_authorship_model(
+            loaded = load_registered_ai_plagiarism_model(
                 model_dir=task_dir,
                 model_id=str(model_id),
                 metadata_filename=str(metadata_filename),
@@ -355,14 +355,14 @@ def load_authorship_bundle(model_dir: Path) -> AuthorshipBundle:
         except Exception as exc:
             if model_id == default_model:
                 logger.warning(
-                    "Default ai_authorship model '%s' failed to load from %s: %s. Failing closed.",
+                    "Default ai_plagiarism model '%s' failed to load from %s: %s. Failing closed.",
                     model_id,
                     task_dir,
                     exc,
                 )
-                return AuthorshipBundle(model_loaded=False)
+                return AiPlagiarismBundle(model_loaded=False)
             logger.warning(
-                "Optional ai_authorship model '%s' failed to load from %s: %s. Omitting.",
+                "Optional ai_plagiarism model '%s' failed to load from %s: %s. Omitting.",
                 model_id,
                 task_dir,
                 exc,
@@ -371,9 +371,9 @@ def load_authorship_bundle(model_dir: Path) -> AuthorshipBundle:
         loaded_models[loaded.model_id] = loaded
 
     if default_model not in loaded_models:
-        return AuthorshipBundle(model_loaded=False)
+        return AiPlagiarismBundle(model_loaded=False)
 
-    return AuthorshipBundle(
+    return AiPlagiarismBundle(
         model_loaded=True,
         models=loaded_models,
         default_model=default_model,
@@ -386,7 +386,7 @@ def load_service_bundle(model_dir: Path) -> ServiceBundle:
     """Load both isolated task bundles from `model_dir`."""
     return ServiceBundle(
         pairwise_plagiarism=load_model_bundle(model_dir),
-        ai_authorship=load_authorship_bundle(model_dir),
+        ai_plagiarism=load_ai_plagiarism_bundle(model_dir),
     )
 
 
@@ -532,23 +532,23 @@ def analyze_pair(
     )
 
 
-def analyze_authorship(
-    bundle: AuthorshipBundle,
+def analyze_ai_plagiarism(
+    bundle: AiPlagiarismBundle,
     code: str,
     language: str = "java",
     operating_mode: Literal["balanced", "low_fpr"] = "balanced",
     model_id: str | None = None,
-) -> AuthorshipAnalysis:
-    """Evaluate single file `ai_authorship` strictly in memory."""
+) -> AiPlagiarismAnalysis:
+    """Evaluate single file `ai_plagiarism` strictly in memory."""
     if not bundle.model_loaded or not bundle.models or bundle.default_model is None:
-        raise ModelNotLoadedError("AI authorship model artifacts not loaded")
+        raise ModelNotLoadedError("AI plagiarism model artifacts not loaded")
 
     selected_id = bundle.default_model if model_id is None else model_id
     loaded = bundle.models.get(selected_id)
     if loaded is None:
         available = ", ".join(bundle.models.keys()) or "none"
         raise InvalidInputError(
-            f"Unknown ai_authorship model '{selected_id}'. Available models: {available}."
+            f"Unknown ai_plagiarism model '{selected_id}'. Available models: {available}."
         )
 
     if not code.strip():
@@ -557,7 +557,7 @@ def analyze_authorship(
     if language not in loaded.supported_languages:
         calibrated = ", ".join(loaded.supported_languages) or "none"
         raise InvalidInputError(
-            f"Language '{language}' is not calibrated for ai_authorship. "
+            f"Language '{language}' is not calibrated for ai_plagiarism. "
             f"Calibrated languages: {calibrated}."
         )
 
@@ -618,7 +618,7 @@ def analyze_authorship(
     )
     predicted_label = int(ai_probability >= threshold_used)
 
-    return AuthorshipAnalysis(
+    return AiPlagiarismAnalysis(
         model_used=loaded.model_id,
         model_version=loaded.model_version,
         ai_probability=ai_probability,

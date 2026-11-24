@@ -20,8 +20,8 @@ from src.models.cnn_numpy import NumpyCnnClassifier
 from src.vocabulary import NUM_STATES
 
 TASK_PAIRWISE_PLAGIARISM = "pairwise_plagiarism"
-TASK_AI_AUTHORSHIP = "ai_authorship"
-SUPPORTED_TASKS: tuple[str, ...] = (TASK_PAIRWISE_PLAGIARISM, TASK_AI_AUTHORSHIP)
+TASK_AI_PLAGIARISM = "ai_plagiarism"
+SUPPORTED_TASKS: tuple[str, ...] = (TASK_PAIRWISE_PLAGIARISM, TASK_AI_PLAGIARISM)
 
 MANIFEST_FILENAME = "manifest.json"
 MANIFEST_SCHEMA_VERSION = 2

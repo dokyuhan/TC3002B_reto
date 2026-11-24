@@ -1,4 +1,4 @@
-"""FastAPI HTTP transport layer separating pairwise plagiarism and AI authorship endpoints."""
+"""FastAPI HTTP transport layer separating pairwise plagiarism and AI plagiarism endpoints."""
 
 from __future__ import annotations
 
@@ -12,17 +12,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.inference import (
-    AuthorshipBundle,
+    AiPlagiarismBundle,
     InvalidInputError,
     ModelBundle,
     ModelNotLoadedError,
     ServiceBundle,
-    analyze_authorship,
+    analyze_ai_plagiarism,
     analyze_pair,
     load_service_bundle,
     resolve_model_dir,
 )
-from src.models.registry import TASK_AI_AUTHORSHIP, TASK_PAIRWISE_PLAGIARISM
+from src.models.registry import TASK_AI_PLAGIARISM, TASK_PAIRWISE_PLAGIARISM
 
 
 class ModelDescriptor(BaseModel):
@@ -90,8 +90,8 @@ class PredictResponse(BaseModel):
     transition_delta: list[list[float]]
 
 
-class AuthorshipPredictRequest(BaseModel):
-    """Request schema for single file POST /predict/ai_authorship."""
+class AiPlagiarismPredictRequest(BaseModel):
+    """Request schema for single file POST /predict/ai_plagiarism."""
 
     code: str
     language: Literal["java", "python", "cpp"] = "java"
@@ -99,8 +99,8 @@ class AuthorshipPredictRequest(BaseModel):
     model: str | None = None
 
 
-class AuthorshipPredictResponse(BaseModel):
-    """Response schema for single file POST /predict/ai_authorship."""
+class AiPlagiarismPredictResponse(BaseModel):
+    """Response schema for single file POST /predict/ai_plagiarism."""
 
     model_used: str
     model_version: str
@@ -127,7 +127,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Structural Code Plagiarism and AI Authorship API",
+    title="Code Plagiarism Detector API",
     version="0.2.0",
     lifespan=lifespan,
 )
@@ -152,7 +152,7 @@ def _get_service(request: Request) -> ServiceBundle:
     return ServiceBundle()
 
 
-def _build_task_health(bundle: ModelBundle | AuthorshipBundle) -> TaskHealth:
+def _build_task_health(bundle: ModelBundle | AiPlagiarismBundle) -> TaskHealth:
     descriptors = [
         ModelDescriptor(
             id=loaded.model_id,
@@ -197,7 +197,7 @@ def health(request: Request) -> HealthResponse:
     """Report service health, per task readiness, and available model inventories."""
     service = _get_service(request)
     pairwise_health = _build_task_health(service.pairwise_plagiarism)
-    authorship_health = _build_task_health(service.ai_authorship)
+    ai_plagiarism_health = _build_task_health(service.ai_plagiarism)
     return HealthResponse(
         status="ok",
         model_loaded=pairwise_health.model_loaded,
@@ -207,7 +207,7 @@ def health(request: Request) -> HealthResponse:
         available_models=pairwise_health.available_models,
         tasks={
             TASK_PAIRWISE_PLAGIARISM: pairwise_health,
-            TASK_AI_AUTHORSHIP: authorship_health,
+            TASK_AI_PLAGIARISM: ai_plagiarism_health,
         },
     )
 
@@ -224,15 +224,15 @@ def predict(payload: PredictRequest, request: Request) -> PredictResponse:
     return _predict_pairwise(payload, request)
 
 
-@app.post("/predict/ai_authorship", response_model=AuthorshipPredictResponse)
-def predict_ai_authorship(
-    payload: AuthorshipPredictRequest,
+@app.post("/predict/ai_plagiarism", response_model=AiPlagiarismPredictResponse)
+def predict_ai_plagiarism(
+    payload: AiPlagiarismPredictRequest,
     request: Request,
-) -> AuthorshipPredictResponse:
-    """Evaluate single file AI authorship strictly in memory."""
-    bundle = _get_service(request).ai_authorship
+) -> AiPlagiarismPredictResponse:
+    """Evaluate single file AI plagiarism strictly in memory."""
+    bundle = _get_service(request).ai_plagiarism
     try:
-        analysis = analyze_authorship(
+        analysis = analyze_ai_plagiarism(
             bundle=bundle,
             code=payload.code,
             language=payload.language,
@@ -244,4 +244,4 @@ def predict_ai_authorship(
     except InvalidInputError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    return AuthorshipPredictResponse(**asdict(analysis))
+    return AiPlagiarismPredictResponse(**asdict(analysis))
