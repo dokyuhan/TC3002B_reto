@@ -11,7 +11,7 @@ uv run --group train python -m model_training.main evaluate       # 3. test on C
 uv run --group train python -m model_training.main evaluate --ir-plag   # 3b. test on unseen IR Plag
 uv run --group train python -m model_training.export_numpy        # 4. copy the weights into the app
 uv run --group train python -m model_training.baseline            # (optional) logistic baseline
-uv run --group train python -m pytest model_training/tests        # (optional) torch vs numpy check
+uv run --group train python -m pytest tests/test_numpy_parity.py # (optional) torch vs numpy check
 ```
 
 ## 1. The idea

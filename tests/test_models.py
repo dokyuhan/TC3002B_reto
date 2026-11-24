@@ -1,7 +1,9 @@
-"""Unit tests for quantitative baselines (Frobenius, JSD, perplexity, TF-IDF)."""
+"""Unit tests for quantitative baselines and permutation-symmetric LightGBM classifier."""
 
 from __future__ import annotations
 
+from pathlib import Path
+import joblib
 import numpy as np
 import pytest
 
@@ -11,6 +13,44 @@ from src.models.baseline import (
     jensen_shannon_divergence,
     transition_perplexity,
 )
+from src.models.classifier import PairwisePlagiarismClassifier
+
+
+def _make_synthetic_pairwise_dataset(
+    n_pos: int = 30,
+    n_neg: int = 30,
+    num_states: int = 12,
+    seed: int = 42,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Generate synthetic (N, 3, K, K) Markov tensors, binary labels, and perplexities."""
+    rng = np.random.default_rng(seed)
+    tensors: list[np.ndarray] = []
+    labels: list[int] = []
+    perp_a: list[float] = []
+    perp_b: list[float] = []
+
+    for _ in range(n_pos):
+        base = rng.dirichlet(np.ones(num_states), size=num_states)
+        noise = rng.normal(0.0, 0.015, size=(num_states, num_states))
+        p_b = np.clip(base + noise, 1e-4, None)
+        p_b = p_b / p_b.sum(axis=1, keepdims=True)
+        tensors.append(np.stack([base, p_b, np.abs(base - p_b)], axis=0).astype(np.float32))
+        labels.append(1)
+        pa = float(rng.uniform(2.0, 4.0))
+        perp_a.append(pa)
+        perp_b.append(pa + float(rng.uniform(-0.15, 0.15)))
+
+    for _ in range(n_neg):
+        p_a = rng.dirichlet(np.ones(num_states), size=num_states)
+        p_b = rng.dirichlet(np.ones(num_states), size=num_states)
+        tensors.append(np.stack([p_a, p_b, np.abs(p_a - p_b)], axis=0).astype(np.float32))
+        labels.append(0)
+        perp_a.append(float(rng.uniform(2.0, 5.0)))
+        perp_b.append(float(rng.uniform(5.5, 9.0)))
+
+    X = np.stack(tensors, axis=0).astype(np.float32)
+    y = np.asarray(labels, dtype=np.uint8)
+    return X, y, np.asarray(perp_a, dtype=np.float64), np.asarray(perp_b, dtype=np.float64)
 
 
 def test_frobenius_distance_properties() -> None:
@@ -92,3 +132,40 @@ def test_tfidf_cosine_baseline(sublinear_tf: bool) -> None:
     batch = baseline.score_pairs([corpus[0], corpus[0]], [corpus[1], corpus[2]])
     assert batch.shape == (2,)
     assert np.allclose(batch, [similar, different], atol=1e-6)
+
+
+def test_pairwise_classifier_fit_symmetry_and_roundtrip(tmp_path: Path) -> None:
+    X, y, perp_a, perp_b = _make_synthetic_pairwise_dataset(n_pos=30, n_neg=30, num_states=12)
+
+    clf = PairwisePlagiarismClassifier(
+        n_estimators=20,
+        max_depth=3,
+        num_leaves=7,
+        min_child_samples=5,
+        calibration_cv=3,
+        random_state=42,
+    )
+    clf.fit(X, y, perplexities=(perp_a, perp_b))
+
+    probs_ab = clf.predict_proba(X, perplexities=(perp_a, perp_b))
+    X_swapped = X[:, [1, 0, 2], :, :]
+    probs_ba = clf.predict_proba(X_swapped, perplexities=(perp_b, perp_a))
+
+    assert probs_ab.shape == (X.shape[0], 2)
+    assert np.all((probs_ab >= 0.0) & (probs_ab <= 1.0))
+    assert np.allclose(probs_ab.sum(axis=1), 1.0, atol=1e-6)
+    assert float(np.max(np.abs(probs_ab - probs_ba))) < 1e-6
+
+    # Standalone call without perplexities must also be permutation-symmetric and valid.
+    probs_no_perp_ab = clf.predict_proba(X)
+    probs_no_perp_ba = clf.predict_proba(X_swapped)
+    assert probs_no_perp_ab.shape == (X.shape[0], 2)
+    assert np.all((probs_no_perp_ab >= 0.0) & (probs_no_perp_ab <= 1.0))
+    assert float(np.max(np.abs(probs_no_perp_ab - probs_no_perp_ba))) < 1e-6
+
+    # Joblib save/load roundtrip preserves exact predictions.
+    model_path = tmp_path / "plagiarism_lgbm.joblib"
+    joblib.dump(clf, model_path, compress=3)
+    loaded: PairwisePlagiarismClassifier = joblib.load(model_path)
+    probs_loaded = loaded.predict_proba(X, perplexities=(perp_a, perp_b))
+    assert np.allclose(probs_ab, probs_loaded, atol=1e-12)
