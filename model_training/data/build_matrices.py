@@ -1,46 +1,64 @@
-"""Paso Markov de la CNN: secuencias AST (dataset/preprocessed) -> matrices (dataset/processed).
+"""Build 3 channel unsmoothed Markov tensors for CNN training and evaluation.
 
-Cada programa pasa de su secuencia de estados AST a una matriz de transición K x K (la misma función
-que usa la app: `src.features.markov`, sin suavizado). Cada muestra de la CNN tiene 3 canales:
-0 = programa A, 1 = programa B, 2 = A - B (con signo).
+Each program sequence is mapped via `src.features.markov.sequence_to_transition_matrix`
+with `smoothing_alpha=0.0`. Channels are `[P_A, P_B, P_A - P_B]`.
 """
+
+from __future__ import annotations
+
 from pathlib import Path
+
 import numpy as np
 
 from src.features.markov import sequence_to_transition_matrix
 
 SPLITS = ("train", "val", "test")
 
-# smoothing_alpha=0.0 es explícito a propósito: la CNN se entrenó sin suavizado y no debe depender del valor por defecto de src.
-def _matrices(tokens: np.ndarray, offsets: np.ndarray, n_states: int) -> np.ndarray:
-    """Corta el arreglo plano de tokens con `offsets` y devuelve una matriz por programa, forma (N, K, K)."""
-    return np.stack([sequence_to_transition_matrix(tokens[s:e], num_states=n_states, smoothing_alpha=0.0)
-                     for s, e in zip(offsets[:-1], offsets[1:])])
 
-def build_split(npz: "np.lib.npyio.NpzFile", split: str) -> dict[str, np.ndarray]:
-    """Construye X (N, 3, K, K), y y group de una partición; canales: A, B y A - B."""
+def _matrices(tokens: np.ndarray, offsets: np.ndarray, n_states: int) -> np.ndarray:
+    """Slice offset packed token sequences into `(N, K, K)` unsmoothed transition matrices."""
+    return np.stack(
+        [
+            sequence_to_transition_matrix(
+                tokens[s:e],
+                num_states=n_states,
+                smoothing_alpha=0.0,
+            )
+            for s, e in zip(offsets[:-1], offsets[1:])
+        ]
+    )
+
+
+def build_split(npz: np.lib.npyio.NpzFile, split: str) -> dict[str, np.ndarray]:
+    """Build `X` `(N, 3, K, K)`, `y`, and `group` arrays for a single split."""
     k = int(npz["num_states"])
     a = _matrices(npz[f"{split}_tokens_a"], npz[f"{split}_offsets_a"], k)
     b = _matrices(npz[f"{split}_tokens_b"], npz[f"{split}_offsets_b"], k)
-    return {"X": np.stack([a, b, a - b], axis=1),
-            "y": npz[f"{split}_y"].astype(np.int64),
-            "group": npz[f"{split}_group_ids"]}
+    return {
+        "X": np.stack([a, b, a - b], axis=1),
+        "y": npz[f"{split}_y"].astype(np.int64),
+        "group": npz[f"{split}_group_ids"],
+    }
+
 
 def convert(sequences_path: str | Path, out_dir: str | Path) -> dict[str, Path]:
-    """Convierte un archivo *_sequences.npz en out_dir/{train,val,test}.npz y devuelve las rutas."""
+    """Convert a preprocessed `*_sequences.npz` archive into `train`, `val`, and `test` splits."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    paths = {}
+    paths: dict[str, Path] = {}
     with np.load(sequences_path) as npz:
         for split in SPLITS:
             if f"{split}_tokens_a" not in npz.files:
-                raise KeyError(f"{sequences_path} no tiene la partición '{split}' (tiene {npz.files[:6]}...)")
+                raise KeyError(
+                    f"{sequences_path} is missing split '{split}' (found {npz.files[:6]}...)"
+                )
             paths[split] = out_dir / f"{split}.npz"
             np.savez(paths[split], **build_split(npz, split))
     return paths
 
+
 def convert_diagnostic(sequences_path: str | Path, out_path: str | Path) -> Path:
-    """Convierte el split 'diagnostic' (IR Plag, solo evaluación) en un único .npz con X, y, group y levels."""
+    """Convert the IR Plag `diagnostic` split into an evaluation `.npz` with `levels`."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with np.load(sequences_path) as npz:
