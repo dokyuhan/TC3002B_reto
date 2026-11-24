@@ -34,7 +34,7 @@ dataset/preprocessed/conplag_v2_sequences.npz     AST state sequences (from scri
 dataset/preprocessed/ir_plag_sequences.npz
         |  main.py build-data   (data/build_matrices.py)
         v
-dataset/processed/{train,val,test,ir_plag}.npz    X (N,3,12,12), y, group   [generated, not committed]
+dataset/processed/{train,val,test,ir_plag}.npz    X (N,3,12,12), y, group
         |  main.py train        (training/trainer.py)
         v
 model_training/checkpoints/best.pt                best weights + saved threshold
