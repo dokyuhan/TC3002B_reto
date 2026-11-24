@@ -7,16 +7,23 @@ PORT="${PORT:-7860}"
 uvicorn src.api.main:app --host 127.0.0.1 --port 8000 &
 API_PID=$!
 
-python - <<'PY'
+API_PID="${API_PID}" python - <<'PY'
 import json
+import os
 import sys
 import time
 import urllib.request
 
+api_pid = int(os.environ["API_PID"])
 deadline = time.monotonic() + 30.0
 url = "http://127.0.0.1:8000/health"
 
 while time.monotonic() < deadline:
+    try:
+        os.kill(api_pid, 0)
+    except OSError:
+        print("FastAPI process exited before becoming ready.", file=sys.stderr)
+        sys.exit(1)
     try:
         with urllib.request.urlopen(url, timeout=2.0) as response:
             if response.status == 200:

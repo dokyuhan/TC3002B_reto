@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
+import os
 from pathlib import Path
+import tempfile
 from typing import Protocol
 
 import joblib
@@ -21,14 +24,26 @@ MANIFEST_SCHEMA_VERSION = 2
 DIAGNOSTIC_SMOOTHING_ALPHA = 0.01
 
 
+def _validate_non_negative_finite(name: str, value: float) -> float:
+    val = float(value)
+    if not math.isfinite(val) or val < 0.0:
+        raise ValueError(f"{name} must be finite and >= 0.0, got {value}")
+    return val
+
+
+def _validate_probability_threshold(name: str, value: float) -> float:
+    val = float(value)
+    if not math.isfinite(val) or not (0.0 <= val <= 1.0):
+        raise ValueError(f"{name} must be finite and within [0.0, 1.0], got {value}")
+    return val
+
+
 @dataclass(frozen=True)
 class PairFeatures:
-    """Extracted pairwise representations shared across pairwise plagiarism scorers."""
+    """Extracted pairwise AST representations shared across pairwise plagiarism scorers."""
 
     states_a: np.ndarray
     states_b: np.ndarray
-    norm_a: str
-    norm_b: str
     num_states: int
     smoothed_tensor: np.ndarray
     perp_a: float
@@ -56,14 +71,16 @@ class LgbmPairwiseScorer:
             raise TypeError(
                 f"Expected PairwisePlagiarismClassifier, got {type(classifier).__name__}"
             )
-        if classifier._num_states is not None and classifier._num_states != num_states:
+        if not classifier.is_fitted:
+            raise ValueError("LightGBM classifier artifact is not fitted.")
+        if classifier.num_states != num_states:
             raise ValueError(
-                f"LightGBM num_states mismatch: artifact has {classifier._num_states}, "
+                f"LightGBM num_states mismatch: artifact has {classifier.num_states}, "
                 f"expected {num_states}"
             )
         self.classifier = classifier
         self.num_states = int(num_states)
-        self.smoothing_alpha = float(smoothing_alpha)
+        self.smoothing_alpha = _validate_non_negative_finite("smoothing_alpha", smoothing_alpha)
 
     def predict_pair_proba(self, features: PairFeatures) -> float:
         """Score a code pair using smoothed `|P_A - P_B|` tensors and perplexities."""
@@ -113,7 +130,7 @@ class CnnPairwiseScorer:
             )
         self.classifier = classifier
         self.num_states = int(num_states)
-        self.smoothing_alpha = float(smoothing_alpha)
+        self.smoothing_alpha = _validate_non_negative_finite("smoothing_alpha", smoothing_alpha)
 
     def predict_pair_proba(self, features: PairFeatures) -> float:
         """Score a code pair using model specific transition matrices and signed differences."""
@@ -149,19 +166,50 @@ class ModelSpec:
 
 @dataclass(frozen=True)
 class LoadedModel:
-    """Loaded pairwise scorer paired with its validated per model metadata."""
+    """Loaded pairwise scorer composed with its validated `ModelSpec`."""
 
-    model_id: str
-    kind: str
-    display_name: str
-    model_version: str
+    spec: ModelSpec
     scorer: PairwiseScorer
-    threshold: float
-    threshold_low_fpr: float
-    smoothing_alpha: float
-    num_states: int
-    strip_boilerplate: bool
-    supported_languages: tuple[str, ...]
+
+    @property
+    def model_id(self) -> str:
+        return self.spec.model_id
+
+    @property
+    def kind(self) -> str:
+        return self.spec.kind
+
+    @property
+    def display_name(self) -> str:
+        return self.spec.display_name
+
+    @property
+    def model_version(self) -> str:
+        return self.spec.model_version
+
+    @property
+    def threshold(self) -> float:
+        return self.spec.threshold
+
+    @property
+    def threshold_low_fpr(self) -> float:
+        return self.spec.threshold_low_fpr
+
+    @property
+    def smoothing_alpha(self) -> float:
+        return self.spec.smoothing_alpha
+
+    @property
+    def num_states(self) -> int:
+        return self.spec.num_states
+
+    @property
+    def strip_boilerplate(self) -> bool:
+        return self.spec.strip_boilerplate
+
+    @property
+    def supported_languages(self) -> tuple[str, ...]:
+        return self.spec.supported_languages
 
 
 def load_model_spec(model_id: str, metadata_path: Path) -> ModelSpec:
@@ -176,7 +224,29 @@ def load_model_spec(model_id: str, metadata_path: Path) -> ModelSpec:
         raise ValueError(f"Metadata file {metadata_path} has an empty artifact path.")
 
     supported_raw = raw.get("supported_languages", ["java"])
-    supported_languages = tuple(str(lang).strip().lower() for lang in supported_raw)
+    if not isinstance(supported_raw, list) or not supported_raw:
+        raise ValueError(
+            f"Metadata file {metadata_path} 'supported_languages' must be a non empty list."
+        )
+    supported_languages: list[str] = []
+    for lang in supported_raw:
+        if not isinstance(lang, str) or not lang.strip():
+            raise ValueError(
+                f"Metadata file {metadata_path} contains invalid language entry: {lang!r}"
+            )
+        supported_languages.append(lang.strip().lower())
+
+    threshold = _validate_probability_threshold("threshold", raw["threshold"])
+    threshold_low_fpr = _validate_probability_threshold(
+        "threshold_low_fpr", raw["threshold_low_fpr"]
+    )
+    smoothing_alpha = _validate_non_negative_finite(
+        "smoothing_alpha",
+        raw.get("smoothing_alpha", 0.0 if kind == "cnn" else 0.01),
+    )
+    num_states = int(raw.get("num_states", NUM_STATES))
+    if num_states < 1:
+        raise ValueError(f"num_states must be >= 1, got {num_states}")
 
     return ModelSpec(
         model_id=model_id,
@@ -184,12 +254,12 @@ def load_model_spec(model_id: str, metadata_path: Path) -> ModelSpec:
         display_name=str(raw.get("display_name", model_id)),
         artifact=artifact,
         model_version=str(raw.get("model_version", "unknown")),
-        threshold=float(raw["threshold"]),
-        threshold_low_fpr=float(raw["threshold_low_fpr"]),
-        smoothing_alpha=float(raw.get("smoothing_alpha", 0.0 if kind == "cnn" else 0.01)),
-        num_states=int(raw.get("num_states", NUM_STATES)),
+        threshold=threshold,
+        threshold_low_fpr=threshold_low_fpr,
+        smoothing_alpha=smoothing_alpha,
+        num_states=num_states,
         strip_boilerplate=bool(raw.get("strip_boilerplate", True)),
-        supported_languages=supported_languages,
+        supported_languages=tuple(supported_languages),
     )
 
 
@@ -237,26 +307,20 @@ def load_registered_model(
         )
 
     scorer = load_scorer(model_dir=model_dir, spec=spec)
-    return LoadedModel(
-        model_id=spec.model_id,
-        kind=spec.kind,
-        display_name=spec.display_name,
-        model_version=spec.model_version,
-        scorer=scorer,
-        threshold=spec.threshold,
-        threshold_low_fpr=spec.threshold_low_fpr,
-        smoothing_alpha=spec.smoothing_alpha,
-        num_states=spec.num_states,
-        strip_boilerplate=spec.strip_boilerplate,
-        supported_languages=spec.supported_languages,
-    )
+    return LoadedModel(spec=spec, scorer=scorer)
 
 
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, indent=2) + "\n")
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def write_model_metadata(metadata_path: Path, payload: dict[str, object]) -> None:
@@ -280,12 +344,19 @@ def ensure_manifest_entry(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if not isinstance(manifest, dict):
             raise ValueError(f"Manifest {manifest_path} must contain a JSON object.")
+        existing_states = manifest.get("num_states")
+        if existing_states is not None and int(existing_states) != int(num_states):
+            raise ValueError(
+                f"Manifest num_states ({existing_states}) conflicts with requested ({num_states})."
+            )
     else:
         manifest = {
             "schema_version": MANIFEST_SCHEMA_VERSION,
             "default_model": default_model or model_id,
             "num_states": int(num_states),
-            "diagnostic_smoothing_alpha": float(diagnostic_smoothing_alpha),
+            "diagnostic_smoothing_alpha": _validate_non_negative_finite(
+                "diagnostic_smoothing_alpha", diagnostic_smoothing_alpha
+            ),
             "tfidf_artifact": tfidf_artifact,
             "models": {},
         }
@@ -293,9 +364,10 @@ def ensure_manifest_entry(
     models_map = dict(manifest.get("models", {}))
     models_map[model_id] = metadata_filename
     manifest["schema_version"] = MANIFEST_SCHEMA_VERSION
-    manifest["num_states"] = int(manifest.get("num_states", num_states))
-    manifest["diagnostic_smoothing_alpha"] = float(
-        manifest.get("diagnostic_smoothing_alpha", diagnostic_smoothing_alpha)
+    manifest["num_states"] = int(num_states)
+    manifest["diagnostic_smoothing_alpha"] = _validate_non_negative_finite(
+        "diagnostic_smoothing_alpha",
+        manifest.get("diagnostic_smoothing_alpha", diagnostic_smoothing_alpha),
     )
     manifest["tfidf_artifact"] = str(manifest.get("tfidf_artifact", tfidf_artifact))
     if default_model is not None:

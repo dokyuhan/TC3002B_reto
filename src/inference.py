@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import logging
+import math
 import os
 from pathlib import Path
 from typing import Literal
@@ -135,9 +136,17 @@ def load_model_bundle(model_dir: Path) -> ModelBundle:
                 f"Manifest default_model '{default_model}' is missing from registered models."
             )
         num_states = int(manifest.get("num_states", NUM_STATES))
+        if num_states != NUM_STATES:
+            raise ValueError(
+                f"Manifest num_states ({num_states}) must match vocabulary NUM_STATES ({NUM_STATES})."
+            )
         diagnostic_alpha = float(
             manifest.get("diagnostic_smoothing_alpha", DIAGNOSTIC_SMOOTHING_ALPHA)
         )
+        if not math.isfinite(diagnostic_alpha) or diagnostic_alpha < 0.0:
+            raise ValueError(
+                f"Manifest diagnostic_smoothing_alpha must be finite and >= 0.0, got {diagnostic_alpha}."
+            )
         tfidf_artifact = str(manifest.get("tfidf_artifact", "tfidf_baseline.joblib"))
     except Exception as exc:
         logger.warning("Failed to parse manifest in %s: %s", model_dir, exc)
@@ -233,64 +242,82 @@ def analyze_pair(
             f"Calibrated languages: {calibrated}."
         )
 
-    res_a = parse_to_state_sequence(
-        code_a,
-        language=language,
-        strip_boilerplate=loaded.strip_boilerplate,
-    )
-    res_b = parse_to_state_sequence(
-        code_b,
-        language=language,
-        strip_boilerplate=loaded.strip_boilerplate,
-    )
+    # Diagnostic heatmap, Markov distances, and TF IDF remain model agnostic across classifiers.
+    diag_res_a = parse_to_state_sequence(code_a, language=language, strip_boilerplate=True)
+    diag_res_b = parse_to_state_sequence(code_b, language=language, strip_boilerplate=True)
 
-    if len(res_a.states) < 2 or len(res_b.states) < 2:
+    if loaded.strip_boilerplate:
+        res_a, res_b = diag_res_a, diag_res_b
+    else:
+        res_a = parse_to_state_sequence(code_a, language=language, strip_boilerplate=False)
+        res_b = parse_to_state_sequence(code_b, language=language, strip_boilerplate=False)
+
+    if (
+        len(diag_res_a.states) < 2
+        or len(diag_res_b.states) < 2
+        or len(res_a.states) < 2
+        or len(res_b.states) < 2
+    ):
         raise InvalidInputError("Insufficient valid AST states for Markov transition analysis")
 
-    # Diagnostic heatmap and Markov distances remain model agnostic across classifiers.
     smoothed_tensor = pair_to_tensor(
-        res_a.states,
-        res_b.states,
+        diag_res_a.states,
+        diag_res_b.states,
         num_states=bundle.num_states,
         smoothing_alpha=bundle.diagnostic_smoothing_alpha,
     )
     p_a, p_b, delta = smoothed_tensor[0], smoothed_tensor[1], smoothed_tensor[2]
 
     perp_a = transition_perplexity(
-        res_a.states,
+        diag_res_a.states,
         p_a,
         smoothing_alpha=bundle.diagnostic_smoothing_alpha,
     )
     perp_b = transition_perplexity(
-        res_b.states,
+        diag_res_b.states,
         p_b,
         smoothing_alpha=bundle.diagnostic_smoothing_alpha,
     )
 
-    norm_a = normalize_source(
-        code_a,
-        language=language,
-        strip_boilerplate=loaded.strip_boilerplate,
-    )
-    norm_b = normalize_source(
-        code_b,
-        language=language,
-        strip_boilerplate=loaded.strip_boilerplate,
-    )
+    if loaded.strip_boilerplate:
+        scorer_tensor = smoothed_tensor
+        scorer_perp_a = float(perp_a)
+        scorer_perp_b = float(perp_b)
+    else:
+        scorer_tensor = pair_to_tensor(
+            res_a.states,
+            res_b.states,
+            num_states=bundle.num_states,
+            smoothing_alpha=bundle.diagnostic_smoothing_alpha,
+        )
+        scorer_perp_a = float(
+            transition_perplexity(
+                res_a.states,
+                scorer_tensor[0],
+                smoothing_alpha=bundle.diagnostic_smoothing_alpha,
+            )
+        )
+        scorer_perp_b = float(
+            transition_perplexity(
+                res_b.states,
+                scorer_tensor[1],
+                smoothing_alpha=bundle.diagnostic_smoothing_alpha,
+            )
+        )
 
     features = PairFeatures(
         states_a=res_a.states,
         states_b=res_b.states,
-        norm_a=norm_a,
-        norm_b=norm_b,
         num_states=bundle.num_states,
-        smoothed_tensor=smoothed_tensor,
-        perp_a=float(perp_a),
-        perp_b=float(perp_b),
+        smoothed_tensor=scorer_tensor,
+        perp_a=scorer_perp_a,
+        perp_b=scorer_perp_b,
         diagnostic_smoothing_alpha=bundle.diagnostic_smoothing_alpha,
     )
     plagiarism_probability = float(loaded.scorer.predict_pair_proba(features))
 
+    norm_a = normalize_source(code_a, language=language, strip_boilerplate=True)
+    norm_b = normalize_source(code_b, language=language, strip_boilerplate=True)
     markov_jsd = float(jensen_shannon_divergence(p_a, p_b))
     markov_frobenius = float(frobenius_distance(p_a, p_b))
     markov_similarity_pct = round(max(0.0, min(100.0, (1.0 - markov_jsd) * 100.0)), 2)
