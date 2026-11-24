@@ -13,8 +13,10 @@ from src.models.baseline import (
     jensen_shannon_divergence,
 )
 from src.models.classifier import PairwisePlagiarismClassifier
+from src.models.cnn_numpy import NumpyCnnClassifier
 from scripts.train import (
     DEFAULT_CONPLAG_V2_MANIFEST,
+    DEFAULT_MODELS_DIR,
     DEFAULT_SMOOTHING_ALPHA,
     PreparedDataset,
     compute_binary_metrics,
@@ -73,13 +75,14 @@ def _compute_curves(y_true: np.ndarray, scores: np.ndarray) -> dict[str, dict[st
 
 def _evaluate_conplag_v2_cv(
     dataset: PreparedDataset,
-) -> tuple[dict[str, dict[str, object]], dict[str, object]]:
-    """Run 5-fold problem-disjoint CV on ConPlag v2 for all 5 models and train full models."""
+) -> tuple[dict[str, dict[str, object]], dict[str, object], dict[int, dict[str, object]]]:
+    """Run 5-fold problem-disjoint CV on ConPlag v2, returning CV results, full models, and fold models."""
     unique_folds = sorted(int(f) for f in np.unique(dataset.fold_ids))
     n_samples = dataset.y.shape[0]
 
     oof_scores: dict[str, np.ndarray] = {name: np.zeros(n_samples, dtype=np.float64) for name in MODEL_ORDER}
     per_fold_metrics: dict[str, list[dict[str, float]]] = {name: [] for name in MODEL_ORDER}
+    fold_models: dict[int, dict[str, object]] = {}
 
     # Unsupervised Markov similarity scores are computed directly per pair.
     jsd_all = _markov_jsd_scores(dataset.X)
@@ -108,6 +111,13 @@ def _evaluate_conplag_v2_cv(
             perplexities=(dataset.perp_a[train_mask], dataset.perp_b[train_mask]),
             groups=dataset.group_ids[train_mask],
         )
+        fold_models[fold] = {
+            "raw_tfidf": raw_tfidf,
+            "sublinear_tfidf": sub_tfidf,
+            "markov_jsd": None,
+            "markov_frobenius": None,
+            "pairwise_lgbm": lgbm,
+        }
 
         fold_train_scores = {
             "raw_tfidf": raw_tfidf.score_pairs(train_codes_a, train_codes_b),
@@ -192,7 +202,145 @@ def _evaluate_conplag_v2_cv(
             "pr_curve": curves["pr_curve"],
         }
 
-    return cv_results, fitted_models
+    return cv_results, fitted_models, fold_models
+
+
+def _score_oof_cross_domain(
+    fold_models: dict[int, dict[str, object]],
+    dataset: PreparedDataset,
+) -> dict[str, np.ndarray]:
+    """Score ConPlag v1 strictly out of fold using the matching ConPlag v2 fold model."""
+    n_samples = dataset.y.shape[0]
+    scores: dict[str, np.ndarray] = {
+        name: np.zeros(n_samples, dtype=np.float64) for name in MODEL_ORDER
+    }
+    scores["markov_jsd"] = _markov_jsd_scores(dataset.X)
+    scores["markov_frobenius"] = _markov_frobenius_scores(dataset.X)
+
+    for fold, models in fold_models.items():
+        mask = dataset.fold_ids == fold
+        if not np.any(mask):
+            continue
+        codes_a = [c for c, m in zip(dataset.codes_a, mask) if m]
+        codes_b = [c for c, m in zip(dataset.codes_b, mask) if m]
+        raw_tfidf: TfidfCosineBaseline = models["raw_tfidf"]  # type: ignore[assignment]
+        sub_tfidf: TfidfCosineBaseline = models["sublinear_tfidf"]  # type: ignore[assignment]
+        lgbm: PairwisePlagiarismClassifier = models["pairwise_lgbm"]  # type: ignore[assignment]
+
+        scores["raw_tfidf"][mask] = raw_tfidf.score_pairs(codes_a, codes_b)
+        scores["sublinear_tfidf"][mask] = sub_tfidf.score_pairs(codes_a, codes_b)
+        scores["pairwise_lgbm"][mask] = lgbm.predict_proba(
+            dataset.X[mask],
+            perplexities=(dataset.perp_a[mask], dataset.perp_b[mask]),
+        )[:, 1]
+
+    return scores
+
+
+def _evaluate_held_out_cnn_comparison(
+    v2_stripped: PreparedDataset,
+    v2_unsmoothed: PreparedDataset,
+    ir_stripped: PreparedDataset,
+    ir_unsmoothed: PreparedDataset,
+    models_dir: Path = DEFAULT_MODELS_DIR,
+) -> dict[str, object] | None:
+    """Compare exported CNN against 3 fold LightGBM strictly on unseen fold 4 and IR Plag."""
+    cnn_weights_path = models_dir / "cnn_weights.npz"
+    if not cnn_weights_path.is_file():
+        return None
+
+    cnn = NumpyCnnClassifier.load(cnn_weights_path)
+    cnn_meta_path = models_dir / "cnn_metadata.json"
+    cnn_thr = 0.5
+    cnn_thr_low = 0.5
+    if cnn_meta_path.is_file():
+        cnn_meta = json.loads(cnn_meta_path.read_text(encoding="utf-8"))
+        cnn_thr = float(cnn_meta.get("threshold", 0.5))
+        cnn_thr_low = float(cnn_meta.get("threshold_low_fpr", cnn_thr))
+
+    train_mask = np.isin(v2_stripped.fold_ids, [0, 1, 2])
+    val_mask = v2_stripped.fold_ids == 3
+    test_mask = v2_stripped.fold_ids == 4
+
+    lgbm_3fold = PairwisePlagiarismClassifier().fit(
+        v2_stripped.X[train_mask],
+        v2_stripped.y[train_mask],
+        perplexities=(v2_stripped.perp_a[train_mask], v2_stripped.perp_b[train_mask]),
+        groups=v2_stripped.group_ids[train_mask],
+    )
+    lgbm_val_probs = lgbm_3fold.predict_proba(
+        v2_stripped.X[val_mask],
+        perplexities=(v2_stripped.perp_a[val_mask], v2_stripped.perp_b[val_mask]),
+    )[:, 1]
+    lgbm_thr = find_f1_optimal_threshold(v2_stripped.y[val_mask], lgbm_val_probs)
+    lgbm_thr_low = find_low_fpr_threshold(v2_stripped.y[val_mask], lgbm_val_probs, max_fpr=0.05)
+
+    lgbm_test_probs = lgbm_3fold.predict_proba(
+        v2_stripped.X[test_mask],
+        perplexities=(v2_stripped.perp_a[test_mask], v2_stripped.perp_b[test_mask]),
+    )[:, 1]
+    lgbm_ir_probs = lgbm_3fold.predict_proba(
+        ir_stripped.X,
+        perplexities=(ir_stripped.perp_a, ir_stripped.perp_b),
+    )[:, 1]
+
+    cnn_test_probs = cnn.predict_pairs(
+        v2_unsmoothed.X[test_mask, 0],
+        v2_unsmoothed.X[test_mask, 1],
+    )
+    cnn_ir_probs = cnn.predict_pairs(ir_unsmoothed.X[:, 0], ir_unsmoothed.X[:, 1])
+
+    def _pack(
+        y_test: np.ndarray,
+        test_probs: np.ndarray,
+        y_ir: np.ndarray,
+        ir_probs: np.ndarray,
+        ir_levels: list[str],
+        thr: float,
+        thr_low: float,
+    ) -> dict[str, object]:
+        return {
+            "threshold": float(thr),
+            "threshold_low_fpr": float(thr_low),
+            "conplag_v2_fold4": compute_binary_metrics(y_test, test_probs, threshold=thr),
+            "conplag_v2_fold4_low_fpr": compute_binary_metrics(y_test, test_probs, threshold=thr_low),
+            "ir_plag": compute_binary_metrics(y_ir, ir_probs, threshold=thr),
+            "ir_plag_low_fpr": compute_binary_metrics(y_ir, ir_probs, threshold=thr_low),
+            "ir_plag_levels": _evaluate_ir_plag_levels(y_ir, ir_probs, ir_levels, threshold=thr),
+            "ir_plag_levels_low_fpr": _evaluate_ir_plag_levels(
+                y_ir, ir_probs, ir_levels, threshold=thr_low
+            ),
+        }
+
+    return {
+        "train_folds": [0, 1, 2],
+        "val_fold": 3,
+        "test_fold": 4,
+        "n_train": int(np.sum(train_mask)),
+        "n_val": int(np.sum(val_mask)),
+        "n_test": int(np.sum(test_mask)),
+        "n_ir_plag": int(ir_stripped.y.shape[0]),
+        "models": {
+            "pairwise_lgbm_3fold": _pack(
+                v2_stripped.y[test_mask],
+                lgbm_test_probs,
+                ir_stripped.y,
+                lgbm_ir_probs,
+                ir_stripped.levels,
+                lgbm_thr,
+                lgbm_thr_low,
+            ),
+            "pairwise_cnn": _pack(
+                v2_unsmoothed.y[test_mask],
+                cnn_test_probs,
+                ir_unsmoothed.y,
+                cnn_ir_probs,
+                ir_unsmoothed.levels,
+                cnn_thr,
+                cnn_thr_low,
+            ),
+        },
+    }
 
 
 def _score_all_models(
@@ -273,9 +421,9 @@ def _build_markdown_tables(summary: dict[str, object]) -> str:
             "",
             "## 2. ConPlag v2 to v1 Domain Shift and Boilerplate Ablation",
             "",
-            "This table compares out of fold F1 on ConPlag v2 against zero shot F1 on ConPlag v1 under both boilerplate regimes.",
+            "This table compares 5 fold out of fold F1 on ConPlag v2 against problem disjoint out of fold F1 on ConPlag v1 under both boilerplate regimes.",
             "",
-            "| Model | Regime | v2 OOF F1 | v1 Zero Shot F1 | F1 Shift (v1 - v2) | Absolute F1 Shift | v1 ROC AUC | v1 FPR |",
+            "| Model | Regime | v2 OOF F1 | v1 OOF F1 | F1 Shift (v1 - v2) | Absolute F1 Shift | v1 ROC AUC | v1 FPR |",
             "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
@@ -340,6 +488,53 @@ def _build_markdown_tables(summary: dict[str, object]) -> str:
                 f"{lv['L4']:.4f} | {lv['L5']:.4f} | {lv['L6']:.4f} | {lv['NON_PLAG_fpr']:.4f} |"
             )
 
+    held_out = summary.get("held_out_cnn_comparison")
+    if isinstance(held_out, dict) and isinstance(held_out.get("models"), dict):
+        lines.extend(
+            [
+                "",
+                "## 4. Held Out Pairwise CNN vs 3 Fold LightGBM Comparison",
+                "",
+                (
+                    f"Both models train strictly on ConPlag v2 folds 0, 1, and 2 (n={held_out['n_train']}), "
+                    f"calibrate on fold 3 (n={held_out['n_val']}), and evaluate on unseen fold 4 "
+                    f"(n={held_out['n_test']}) plus zero shot IR Plag (n={held_out['n_ir_plag']})."
+                ),
+                "",
+                "| Model | Split | Threshold | Precision | Recall | F1 | ROC AUC | FPR |",
+                "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        models_block: dict[str, dict[str, object]] = held_out["models"]  # type: ignore[assignment]
+        for model_key in ("pairwise_lgbm_3fold", "pairwise_cnn"):
+            entry = models_block[model_key]
+            for split_key, split_label in (
+                ("conplag_v2_fold4", "ConPlag v2 Fold 4"),
+                ("ir_plag", "IR Plag Zero Shot"),
+            ):
+                m = entry[split_key]  # type: ignore[index]
+                lines.append(
+                    f"| `{model_key}` | {split_label} | {m['threshold']:.4f} | "
+                    f"{m['precision']:.4f} | {m['recall']:.4f} | {m['f1']:.4f} | "
+                    f"{m['roc_auc']:.4f} | {m['fpr']:.4f} |"
+                )
+
+        lines.extend(
+            [
+                "",
+                "### Held Out IR Plag Per Level Recall (L1 to L6) and NON_PLAG FPR",
+                "",
+                "| Model | L1 | L2 | L3 | L4 | L5 | L6 | NON_PLAG FPR |",
+                "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for model_key in ("pairwise_lgbm_3fold", "pairwise_cnn"):
+            lv = models_block[model_key]["ir_plag_levels"]  # type: ignore[index]
+            lines.append(
+                f"| `{model_key}` | {lv['L1']:.4f} | {lv['L2']:.4f} | {lv['L3']:.4f} | "
+                f"{lv['L4']:.4f} | {lv['L5']:.4f} | {lv['L6']:.4f} | {lv['NON_PLAG_fpr']:.4f} |"
+            )
+
     lines.append("")
     return "\n".join(lines)
 
@@ -371,10 +566,10 @@ def run_evaluation(
         smoothing_alpha=smoothing_alpha,
     )
 
-    v2_cv_stripped, fitted_stripped = _evaluate_conplag_v2_cv(v2_stripped)
+    v2_cv_stripped, fitted_stripped, fold_models_stripped = _evaluate_conplag_v2_cv(v2_stripped)
 
-    # Zero-shot evaluation on ConPlag v1 (strip_boilerplate=True).
-    v1_scores_stripped = _score_all_models(fitted_stripped, v1_stripped)
+    # Problem-disjoint out-of-fold evaluation on ConPlag v1 (strip_boilerplate=True).
+    v1_scores_stripped = _score_oof_cross_domain(fold_models_stripped, v1_stripped)
     v1_stripped_results: dict[str, dict[str, object]] = {}
     for name in MODEL_ORDER:
         thr = float(v2_cv_stripped[name]["threshold"])
@@ -388,7 +583,7 @@ def run_evaluation(
             "metrics": m_v1,
         }
 
-    # Boilerplate ablation: train on ConPlag v2 (strip=False) and evaluate on ConPlag v1 (strip=False).
+    # Boilerplate ablation: train on ConPlag v2 (strip=False) and score ConPlag v1 out of fold.
     v2_unstripped = prepare_manifest_dataset(
         conplag_v2_manifest,
         language="java",
@@ -401,8 +596,8 @@ def run_evaluation(
         strip_boilerplate=False,
         smoothing_alpha=smoothing_alpha,
     )
-    v2_cv_unstripped, fitted_unstripped = _evaluate_conplag_v2_cv(v2_unstripped)
-    v1_scores_unstripped = _score_all_models(fitted_unstripped, v1_unstripped)
+    v2_cv_unstripped, _, fold_models_unstripped = _evaluate_conplag_v2_cv(v2_unstripped)
+    v1_scores_unstripped = _score_oof_cross_domain(fold_models_unstripped, v1_unstripped)
     v1_unstripped_results: dict[str, dict[str, object]] = {}
     for name in MODEL_ORDER:
         thr = float(v2_cv_unstripped[name]["threshold"])
@@ -438,6 +633,25 @@ def run_evaluation(
             "pr_curve": curves["pr_curve"],
         }
 
+    v2_unsmoothed = prepare_manifest_dataset(
+        conplag_v2_manifest,
+        language="java",
+        strip_boilerplate=True,
+        smoothing_alpha=0.0,
+    )
+    ir_unsmoothed = prepare_manifest_dataset(
+        ir_plag_manifest,
+        language="java",
+        strip_boilerplate=True,
+        smoothing_alpha=0.0,
+    )
+    held_out_cnn = _evaluate_held_out_cnn_comparison(
+        v2_stripped=v2_stripped,
+        v2_unsmoothed=v2_unsmoothed,
+        ir_stripped=ir_stripped,
+        ir_unsmoothed=ir_unsmoothed,
+    )
+
     summary: dict[str, object] = {
         "config": {
             "smoothing_alpha": float(smoothing_alpha),
@@ -450,6 +664,7 @@ def run_evaluation(
             "strip_boilerplate_false": v1_unstripped_results,
         },
         "ir_plag_zero_shot": ir_results,
+        "held_out_cnn_comparison": held_out_cnn,
     }
 
     eval_dir.mkdir(parents=True, exist_ok=True)

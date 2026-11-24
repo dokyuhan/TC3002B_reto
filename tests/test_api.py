@@ -12,7 +12,7 @@ import pytest
 from src.api.main import app
 from src.models.baseline import TfidfCosineBaseline
 from src.models.registry import ensure_manifest_entry, write_model_metadata
-from src.preprocessing.normalizer import DEFAULT_AST_STATES, NUM_STATES
+from src.vocabulary import DEFAULT_AST_STATES, NUM_STATES
 
 JAVA_CODE_A = """
 public class SumLoop {
@@ -53,6 +53,8 @@ public class BrokenSyntax {
 """
 
 EXPECTED_PREDICT_KEYS = {
+    "model_used",
+    "model_version",
     "plagiarism_probability",
     "predicted_label",
     "threshold_used",
@@ -133,6 +135,17 @@ def test_health_with_loaded_models(
         "model_loaded": True,
         "supported_languages": ["java"],
         "model_version": "0.1.0-test",
+        "default_model": "cnn",
+        "available_models": [
+            {
+                "id": "cnn",
+                "display_name": "Pairwise CNN",
+                "model_version": "0.1.0-test",
+                "supported_languages": ["java"],
+                "threshold": 0.35,
+                "threshold_low_fpr": 0.65,
+            }
+        ],
     }
 
 

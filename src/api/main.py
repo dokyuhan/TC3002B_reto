@@ -9,7 +9,7 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.inference import (
     InvalidInputError,
@@ -21,6 +21,17 @@ from src.inference import (
 )
 
 
+class ModelDescriptor(BaseModel):
+    """Metadata describing one loaded classifier available for inference."""
+
+    id: str
+    display_name: str
+    model_version: str
+    supported_languages: list[str]
+    threshold: float
+    threshold_low_fpr: float
+
+
 class HealthResponse(BaseModel):
     """Response schema for GET /health."""
 
@@ -28,6 +39,8 @@ class HealthResponse(BaseModel):
     model_loaded: bool
     supported_languages: list[str]
     model_version: str
+    default_model: str | None = None
+    available_models: list[ModelDescriptor] = Field(default_factory=list)
 
 
 class PredictRequest(BaseModel):
@@ -37,11 +50,14 @@ class PredictRequest(BaseModel):
     code_b: str
     language: Literal["java", "python", "cpp"] = "java"
     operating_mode: Literal["balanced", "low_fpr"] = "balanced"
+    model: str | None = None
 
 
 class PredictResponse(BaseModel):
     """Response schema for POST /predict."""
 
+    model_used: str
+    model_version: str
     plagiarism_probability: float
     predicted_label: int
     threshold_used: float
@@ -92,13 +108,26 @@ def _get_bundle(request: Request) -> ModelBundle:
 
 @app.get("/health", response_model=HealthResponse)
 def health(request: Request) -> HealthResponse:
-    """Report service health, model readiness, and calibrated languages."""
+    """Report service health, model readiness, available models, and calibrated languages."""
     bundle = _get_bundle(request)
+    descriptors = [
+        ModelDescriptor(
+            id=loaded.model_id,
+            display_name=loaded.display_name,
+            model_version=loaded.model_version,
+            supported_languages=list(loaded.supported_languages),
+            threshold=loaded.threshold,
+            threshold_low_fpr=loaded.threshold_low_fpr,
+        )
+        for loaded in bundle.models.values()
+    ]
     return HealthResponse(
         status="ok",
         model_loaded=bundle.model_loaded,
         supported_languages=list(bundle.supported_languages),
         model_version=bundle.model_version,
+        default_model=bundle.default_model if bundle.model_loaded else None,
+        available_models=descriptors if bundle.model_loaded else [],
     )
 
 
@@ -113,6 +142,7 @@ def predict(payload: PredictRequest, request: Request) -> PredictResponse:
             code_b=payload.code_b,
             language=payload.language,
             operating_mode=payload.operating_mode,
+            model_id=payload.model,
         )
     except ModelNotLoadedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

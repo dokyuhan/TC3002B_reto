@@ -7,7 +7,8 @@ import numpy as np
 import pytest
 
 from src.features.extraction import build_diagnostic_tensors, run_pipeline
-from src.preprocessing.normalizer import NUM_STATES, normalize_source
+from src.preprocessing.normalizer import normalize_source
+from src.vocabulary import NUM_STATES
 from src.preprocessing.parser import ParseResult, parse_to_state_sequence
 
 JAVA_SAMPLE = """\

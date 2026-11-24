@@ -1,6 +1,6 @@
 # TC3002B Reto: Source Code Plagiarism and AI Detection
 
-This repository contains the software for the capstone challenge in course TC3002B.570. The system detects pairwise Java source code plagiarism: you give it two programs and it returns the probability that one is a plagiarized version of the other. AI code classification is planned for Phase 2. The live application runs at https://tc3002b-reto.onrender.com/. Read the [architecture diagram](docs/architecture.mmd) for the system layout.
+This repository contains the software for the capstone challenge in course TC3002B.570. The system detects pairwise Java source code plagiarism by scoring structural AST Markov transitions with selectable classifiers (`Pairwise LightGBM` default, `Pairwise CNN` selectable). Single file AI code classification is planned for Phase 2. The live application runs at https://tc3002b-reto.onrender.com/. Read the [architecture diagram](docs/architecture.mmd) and [evaluation report](docs/evaluation/metrics_tables.md) for system details and benchmark results.
 
 ## Team
 
@@ -12,28 +12,30 @@ The project team has 3 members:
 
 ## How it works
 
-1. **Parse.** Each Java program is parsed into an Abstract Syntax Tree (AST). Every node is mapped to one of 12 states (`IMPORT`, `FUNCTION`, `CLASS`, `ASSIGN`, `IF`, `FOR`, `WHILE`, `CALL`, `RETURN`, `EXCEPTION`, `OP`, `OTHER`), which turns a program into a sequence of states.
-2. **Markov matrix.** For each program, count how often state *i* is followed by state *j* and normalize each row. The result is a 12 x 12 transition matrix that describes the structure of the code and ignores names and formatting.
-3. **Classify.** A small CNN receives three channels `[P_A, P_B, P_A - P_B]` and outputs the probability that the pair is plagiarized. The app averages the answer for `(A, B)` and `(B, A)`, so the result does not depend on the order of the two programs.
-4. **Compare.** The UI also shows reference measures next to the verdict: Markov similarity (Jensen-Shannon divergence), Frobenius distance, a TF-IDF text similarity baseline, and a heatmap of the transition difference.
+1. **Parse.** Each Java program is parsed into an Abstract Syntax Tree (AST) with Tree Sitter. Nodes map to 12 structural states (`IMPORT`, `FUNCTION`, `CLASS`, `ASSIGN`, `IF`, `FOR`, `WHILE`, `CALL`, `RETURN`, `EXCEPTION`, `OP`, `OTHER`).
+2. **Markov matrix.** Each state sequence is converted into a 12 x 12 first order Markov transition matrix describing structural flow independent of identifier names and formatting.
+3. **Classify.** Two permutation symmetric pairwise classifiers are persisted via `models/manifest.json` and selectable at runtime:
+   * **Pairwise LightGBM (`lgbm`, default):** Platt calibrated gradient boosted classifier on smoothed (`alpha = 0.01`) symmetric features, divergence metrics, and sequence perplexities.
+   * **Pairwise CNN (`cnn`, selectable):** Compact PyTorch trained, NumPy evaluated CNN on unsmoothed (`alpha = 0.0`) 3 channel tensors `[P_A, P_B, P_A - P_B]`, symmetrized across `(A, B)` and `(B, A)`.
+4. **Compare.** Alongside the verdict and active decision threshold, the dashboard reports model agnostic Markov similarity (Jensen Shannon divergence), Frobenius distance, a character n gram TF IDF cosine baseline, an AST transition delta heatmap, and a side by side code diff.
 
-The label the model learns is "plagiarized pair" (ConPlag verdicts and IR Plag cases). It is not an AI-authorship label.
+Both models learn binary pairwise plagiarism labels (ConPlag verdicts and IR Plag cases), not AI authorship labels.
 
 ## Repository structure
 
-* `src/vocabulary.py`: Defines the 12 AST states and the supported languages.
+* `src/vocabulary.py`: Defines the 12 AST states and supported languages.
 * `src/preprocessing/`: Normalizes source code and parses files into AST state sequences.
-* `src/features/`: Builds Markov transition matrices and extracts feature tensors.
-* `src/models/`: Implements the similarity baselines (`baseline.py`) and the numpy forward pass of the CNN (`cnn_numpy.py`).
-* `src/inference.py`: Runs the full pairwise analysis in memory.
-* `src/api/`: Exposes the FastAPI HTTP endpoints.
-* `ui/`: Runs the Streamlit dashboard and stores 3 Java demo pairs.
-* `models/`: Stores the trained files the app loads (`cnn_weights.npz`, `tfidf_baseline.joblib`, `model_metadata.json`).
-* `model_training/`: Trains and evaluates the CNN with PyTorch and exports its weights to `models/`. See its [README](model_training/README.md).
-* `scripts/`: Builds the preprocessed datasets and fits the TF-IDF baseline.
-* `dataset/`: Holds `raw/` (ConPlag and IR Plag pairs), `preprocessed/` (AST sequences), `processed/` (CNN input matrices, regenerated with `build-data`) and `results/` (training history and metrics).
-* `docs/`: Stores the architecture diagram.
-* `tests/`: Runs unit and API tests.
+* `src/features/`: Builds Markov transition matrices and pairwise tensors.
+* `src/models/`: Implements similarity baselines (`baseline.py`), LightGBM classifier (`classifier.py`), NumPy CNN forward pass (`cnn_numpy.py`), and the pluggable scorer registry (`registry.py`).
+* `src/inference.py`: Loads registered models via `models/manifest.json` and runs pairwise analysis in memory.
+* `src/api/`: Exposes FastAPI endpoints (`/health`, `/predict`).
+* `ui/`: Runs the Streamlit dashboard with Model and Operating Mode selectors and 3 Java demo pairs.
+* `models/`: Stores `manifest.json`, `lgbm_metadata.json`, `cnn_metadata.json`, `plagiarism_lgbm.joblib`, `cnn_weights.npz`, and `tfidf_baseline.joblib`.
+* `model_training/`: Trains and evaluates the CNN with PyTorch and exports NumPy weights into `models/`. See its [README](model_training/README.md).
+* `scripts/`: Runs dataset preparation (`build_datasets.py`), LightGBM + TF IDF training (`train.py`, `fit_tfidf.py`), cross domain evaluation (`evaluate.py`), and chart generation (`generate_plots.py`).
+* `dataset/`: Holds `raw/` (ConPlag and IR Plag pairs) and `preprocessed/` (AST sequences). Derived `processed/` matrices and `results/` JSON files are gitignored.
+* `docs/`: Stores the architecture diagram, evaluation metrics tables, and figures.
+* `tests/`: Runs unit, parity, and FastAPI tests.
 
 ## Setup
 
@@ -47,7 +49,7 @@ uv run pytest
 
 ## Run the app
 
-The app needs the files in `models/`, which are committed to the repository.
+The app loads all registered artifacts from `models/manifest.json`.
 
 **Option 1: two terminals (development).**
 
@@ -59,7 +61,7 @@ uv run uvicorn src.api.main:app --port 8000
 uv run streamlit run ui/app.py
 ```
 
-The UI calls the API at `http://localhost:8000`. Set `API_URL` to point it somewhere else. Set `MODEL_DIR` to load the model files from another folder (default: `models/`).
+The UI calls `API_URL` (default `http://localhost:8000`). Set `MODEL_DIR` to load artifacts from another directory (default `models/`).
 
 **Option 2: Docker Compose (API on 8000, UI on 8501).**
 
@@ -67,7 +69,7 @@ The UI calls the API at `http://localhost:8000`. Set `API_URL` to point it somew
 docker compose up --build
 ```
 
-**Option 3: one container (what Render runs).** `entrypoint.sh` starts the API, waits for `/health`, then starts the UI on `$PORT` (default 7860).
+**Option 3: single container (Render deployment).** `entrypoint.sh` starts FastAPI, waits until `/health` returns HTTP 200 with `model_loaded: true`, and then launches Streamlit on `$PORT` (default `7860`).
 
 ```bash
 docker build -t tc3002b-reto .
@@ -81,58 +83,33 @@ curl http://localhost:8000/health
 
 curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
-  -d '{"code_a": "<java source A>", "code_b": "<java source B>", "language": "java", "operating_mode": "balanced"}'
+  -d '{"code_a": "<java source A>", "code_b": "<java source B>", "language": "java", "operating_mode": "balanced", "model": "lgbm"}'
 ```
 
-`/predict` returns `plagiarism_probability`, `predicted_label`, `threshold_used`, the Markov and TF-IDF similarity scores, perplexities, AST token counts, parse warnings, and the 12 x 12 `transition_delta`. `operating_mode` can be `balanced` or `low_fpr`; both use the thresholds in `models/model_metadata.json`.
+`GET /health` returns `default_model` and `available_models` descriptors. `POST /predict` accepts optional `model` (`lgbm` or `cnn`, defaulting to `default_model`) and `operating_mode` (`balanced` or `low_fpr`), returning `model_used`, `model_version`, `plagiarism_probability`, `predicted_label`, `threshold_used`, baseline similarities, parse warnings, and the 12 x 12 `transition_delta`.
 
-## Train the CNN
-
-Training needs PyTorch, which is not part of the app image. It lives in its own dependency group, so the commands below use `uv run --group train` and uv installs PyTorch the first time you run them. Run the whole pipeline from the repository root:
+## Training and evaluation
 
 ```bash
-# 1. Raw Java pairs -> AST sequences (dataset/preprocessed). Only needed if dataset/raw changes.
+# 1. Raw Java pairs -> AST sequences (dataset/preprocessed)
 uv run python -m scripts.build_datasets
 
-# 2. AST sequences -> 3-channel matrices (dataset/processed)
+# 2. Train LightGBM + TF IDF baseline (updates models/lgbm_metadata.json and models/manifest.json)
+uv run python -m scripts.train
+
+# 3. Train and export optional PyTorch CNN (CPU wheel index via --group train)
 uv run --group train python -m model_training.main build-data
-
-# 3. Train (keeps the best epoch in model_training/checkpoints/best.pt)
 uv run --group train python -m model_training.main train
-
-# 4. Evaluate on the ConPlag test split and on the unseen IR Plag dataset
 uv run --group train python -m model_training.main evaluate
 uv run --group train python -m model_training.main evaluate --ir-plag
-
-# 5. Copy the trained weights into the app (models/cnn_weights.npz and models/model_metadata.json)
 uv run --group train python -m model_training.export_numpy
-
-# 6. Check that the app and PyTorch agree
 uv run --group train python -m pytest tests/test_numpy_parity.py
+
+# 4. Run full evaluation report and regenerate charts (docs/evaluation/)
+uv run python -m scripts.evaluate
+uv run python -m scripts.generate_plots
 ```
-
-Run step 5 after every retraining, otherwise the app keeps serving the old weights. All hyperparameters live in `model_training/config.py`. Metrics are written to `dataset/results/`. The TF-IDF baseline is fitted separately with `uv run python -m scripts.fit_tfidf`.
-
-See the [model_training README](model_training/README.md) for what every step and function does.
-
-## Results
-
-Metrics of the model the app serves (threshold 0.5, probabilities averaged over both input orders), from `models/model_metadata.json`:
-
-| Dataset | Accuracy | Recall | False positive rate | PR-AUC |
-|---|---|---|---|---|
-| ConPlag validation (168 pairs) | 0.786 | 0.362 | 0.050 | 0.646 |
-| ConPlag test (181 pairs) | 0.890 | 0.609 | 0.015 | 0.878 |
-| IR Plag, never seen in training (460 pairs) | 0.611 | 0.589 | 0.314 | 0.868 |
-
-Limitations:
-
-* The model rarely accuses non-plagiarized code on ConPlag, but it misses part of the plagiarized pairs (recall 0.61).
-* On IR Plag it separates easy plagiarism well but struggles on the hardest levels (`L5`, `L6`) and flags many non-plagiarized pairs.
-* A 12 x 12 matrix discards names, nesting and statement order, which limits what any model can learn from it.
-* Only Java is calibrated.
-* The labels describe plagiarism between two programs, not whether a program was written by an AI.
 
 ## Deployment
 
-CI (`.github/workflows/ci.yaml`) runs the linter and the tests on every push and pull request to `main`. A push to `main` that passes triggers a Render deploy, which builds the `Dockerfile`. The image contains `src/`, `ui/` and `models/` only. It does not contain PyTorch or `dataset/`.
+CI (`.github/workflows/ci.yaml`) runs ruff lint and pytest on every push and pull request to `main`. Passing pushes to `main` trigger a Render deploy using `Dockerfile`, which packages `src/`, `ui/`, and `models/` without PyTorch or `dataset/`.
