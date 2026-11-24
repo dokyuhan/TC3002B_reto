@@ -146,37 +146,17 @@ def fetch_backend_health(api_url: str) -> tuple[dict[str, Any] | None, str | Non
     return payload, None
 
 
-def request_prediction(
-    api_url: str,
-    code_a: str,
-    code_b: str,
-    language: str,
-    operating_mode: str,
-    model: str | None = None,
+def _post_predict_endpoint(
+    url: str,
+    payload: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, int | None, str | None]:
-    """Send POST /predict to the FastAPI backend and classify errors."""
-    payload: dict[str, Any] = {
-        "code_a": code_a,
-        "code_b": code_b,
-        "language": language,
-        "operating_mode": operating_mode,
-    }
-    if model is not None:
-        payload["model"] = model
+    """Send a JSON POST prediction request to the FastAPI backend and classify errors."""
     try:
-        response = httpx.post(
-            f"{api_url}/predict",
-            json=payload,
-            timeout=PREDICT_TIMEOUT_S,
-        )
+        response = httpx.post(url, json=payload, timeout=PREDICT_TIMEOUT_S)
     except httpx.TimeoutException:
-        return (
-            None,
-            None,
-            f"Analysis timed out after {PREDICT_TIMEOUT_S:.0f}s.",
-        )
+        return None, None, f"Analysis timed out after {PREDICT_TIMEOUT_S:.0f}s."
     except httpx.RequestError as exc:
-        return None, None, f"Connection to {api_url}/predict failed: {exc}"
+        return None, None, f"Connection to {url} failed: {exc}"
 
     if response.status_code == 200:
         try:
@@ -189,6 +169,44 @@ def request_prediction(
 
     detail = _extract_error_detail(response)
     return None, response.status_code, detail
+
+
+def request_prediction(
+    api_url: str,
+    code_a: str,
+    code_b: str,
+    language: str,
+    operating_mode: str,
+    model: str | None = None,
+) -> tuple[dict[str, Any] | None, int | None, str | None]:
+    """Send POST /predict/pairwise_plagiarism to the FastAPI backend."""
+    payload: dict[str, Any] = {
+        "code_a": code_a,
+        "code_b": code_b,
+        "language": language,
+        "operating_mode": operating_mode,
+    }
+    if model is not None:
+        payload["model"] = model
+    return _post_predict_endpoint(f"{api_url}/predict/pairwise_plagiarism", payload)
+
+
+def request_authorship_prediction(
+    api_url: str,
+    code: str,
+    language: str,
+    operating_mode: str,
+    model: str | None = None,
+) -> tuple[dict[str, Any] | None, int | None, str | None]:
+    """Send single file POST /predict/ai_authorship to the FastAPI backend."""
+    payload: dict[str, Any] = {
+        "code": code,
+        "language": language,
+        "operating_mode": operating_mode,
+    }
+    if model is not None:
+        payload["model"] = model
+    return _post_predict_endpoint(f"{api_url}/predict/ai_authorship", payload)
 
 
 def _extract_error_detail(response: httpx.Response) -> str:
@@ -502,18 +520,30 @@ def _poll_api_status_until_ready() -> None:
         st.rerun()
 
 
-def _render_sidebar() -> tuple[str, str | None, str, dict[str, str], bool]:
+def _render_sidebar() -> tuple[str, str | None, str, dict[str, str], bool, dict[str, Any]]:
     """Render sidebar API status, controls, and conditional file uploaders."""
     health, health_error = fetch_backend_health(API_URL)
     color, tooltip, is_green = _classify_health(health, health_error)
 
-    available_raw = health.get("available_models") if isinstance(health, dict) else None
+    tasks = health.get("tasks") if isinstance(health, dict) and isinstance(health.get("tasks"), dict) else {}
+    pairwise_health = (
+        tasks.get("pairwise_plagiarism")
+        if isinstance(tasks.get("pairwise_plagiarism"), dict)
+        else (health if isinstance(health, dict) else {})
+    )
+    authorship_health = (
+        tasks.get("ai_authorship")
+        if isinstance(tasks.get("ai_authorship"), dict)
+        else {}
+    )
+
+    available_raw = pairwise_health.get("available_models")
     available_models = [
         item for item in (available_raw or []) if isinstance(item, dict) and item.get("id")
     ]
     default_model = (
-        str(health["default_model"])
-        if isinstance(health, dict) and health.get("default_model")
+        str(pairwise_health["default_model"])
+        if pairwise_health.get("default_model")
         else None
     )
     model_by_id = {str(item["id"]): item for item in available_models}
@@ -619,7 +649,7 @@ def _render_sidebar() -> tuple[str, str | None, str, dict[str, str], bool]:
                     st.session_state["baseline_hash_b"] = _content_hash(decoded_b)
                     st.session_state["last_upload_b"] = upload_token_b
 
-    return language, selected_model_id, operating_mode, model_labels, is_green
+    return language, selected_model_id, operating_mode, model_labels, is_green, authorship_health
 
 
 def _render_verdict_kpi(
@@ -946,116 +976,219 @@ def _run_analysis_into_slots(
         _render_unavailable_placeholders(kpi_slot, heatmap_slot, diff_slot)
 
 
+def _render_ai_authorship_tab(
+    authorship_health: dict[str, Any],
+    operating_mode: str,
+) -> None:
+    """Render the single file AI Authorship tab decoupled from pairwise plagiarism."""
+    if not authorship_health.get("model_loaded"):
+        st.info(
+            "No AI authorship model is loaded yet. Register a single file classifier under "
+            "`models/ai_authorship/manifest.json` to enable single file AI vs human scoring."
+        )
+        st.text_area(
+            "Submission Source Code",
+            value="",
+            height=260,
+            disabled=True,
+            placeholder="Paste a single source file once an ai_authorship model is registered.",
+        )
+        return
+
+    available_raw = authorship_health.get("available_models") or []
+    available_models = [m for m in available_raw if isinstance(m, dict) and m.get("id")]
+    model_by_id = {str(m["id"]): m for m in available_models}
+    model_ids = list(model_by_id.keys())
+    default_id = str(authorship_health.get("default_model") or "")
+    if default_id in model_ids:
+        model_ids = [default_id, *[mid for mid in model_ids if mid != default_id]]
+
+    ctrl_a, ctrl_b = st.columns(2)
+    with ctrl_a:
+        selected_model = st.selectbox(
+            "AI Authorship Model",
+            options=model_ids,
+            format_func=lambda mid: (
+                f"{model_by_id[mid].get('display_name', mid)} "
+                f"(v{model_by_id[mid].get('model_version', 'unknown')})"
+            ),
+            key="authorship_model_selector",
+        )
+    supported_langs = model_by_id.get(selected_model, {}).get("supported_languages") or ["java"]
+    with ctrl_b:
+        auth_language = st.selectbox(
+            "Submission Language",
+            options=list(dict.fromkeys(supported_langs)),
+            format_func=lambda lang: lang.upper() if lang == "cpp" else lang.title(),
+            key="authorship_language_selector",
+        )
+
+    submission_code = st.text_area(
+        "Submission Source Code",
+        key="authorship_code",
+        height=300,
+    )
+    if not submission_code.strip():
+        st.caption("Add source code to evaluate AI authorship probability.")
+        return
+
+    with st.spinner("Evaluating AI authorship..."):
+        result, status_code, error_detail = request_authorship_prediction(
+            api_url=API_URL,
+            code=submission_code,
+            language=auth_language,
+            operating_mode=operating_mode,
+            model=selected_model,
+        )
+
+    if result is None:
+        if status_code == 422:
+            _render_inline_hint(str(error_detail), tone="red")
+        else:
+            st.error(f"AI authorship request failed ({status_code}): {error_detail}")
+        return
+
+    ai_prob = float(result.get("ai_probability", 0.0))
+    is_ai = int(result.get("predicted_label", 0)) == 1
+    threshold_used = float(result.get("threshold_used", 0.5))
+    col_v, col_p, col_perp = st.columns(3)
+    col_v.metric("Authorship Verdict", "AI Authored" if is_ai else "Human Written")
+    col_p.metric("AI Authorship Probability", f"{ai_prob * 100:.1f}%")
+    col_perp.metric("AST Perplexity", f"{float(result.get('perplexity', 0.0)):.4f}")
+    st.caption(
+        f"Model: {result.get('model_used')} (v{result.get('model_version')}) | "
+        f"Decision threshold: {threshold_used * 100:.1f}%"
+    )
+    if bool(result.get("parse_warnings", False)):
+        _render_inline_hint("Syntax error found. Partial tree used.", tone="amber")
+
+
 def main() -> None:
     """Entrypoint for the Streamlit application."""
     st.set_page_config(
-        page_title="Code Plagiarism Detector",
+        page_title="Code Plagiarism and AI Authorship Detector",
         layout="wide",
     )
     _init_session_state()
 
-    language, model_id, operating_mode, model_labels, backend_ready = _render_sidebar()
+    (
+        language,
+        model_id,
+        operating_mode,
+        model_labels,
+        backend_ready,
+        authorship_health,
+    ) = _render_sidebar()
 
-    st.title("Code Plagiarism Detector")
+    st.title("Code Plagiarism and AI Authorship Detector")
 
-    code_inputs_expander = st.expander(
-        "Code Inputs",
-        expanded=False,
-        key="code_inputs_expanded",
-        on_change="rerun",
-    )
-    with code_inputs_expander:
-        editor_col_a, editor_col_b = st.columns(2)
-        with editor_col_a:
-            code_a = st.text_area(
-                "Code A",
-                key="code_a",
-                height=340,
-                on_change=_on_code_edit,
-            )
-            hint_slot_a = st.empty()
-        with editor_col_b:
-            code_b = st.text_area(
-                "Code B",
-                key="code_b",
-                height=340,
-                on_change=_on_code_edit,
-            )
-            hint_slot_b = st.empty()
+    tab_plagiarism, tab_authorship = st.tabs(["Pairwise Plagiarism", "AI Authorship"])
 
-    collapsed_hints_slot = st.empty()
-    error_slot = st.empty()
-
-    st.divider()
-    st.subheader("Analysis Results")
-    left_col, right_col = st.columns(2, gap="large")
-    with left_col:
-        kpi_slot = st.empty()
-    with right_col:
-        heatmap_slot = st.empty()
-
-    st.divider()
-    st.subheader("Code Diff")
-    diff_slot = st.empty()
-
-    _run_analysis_into_slots(
-        code_a=code_a,
-        code_b=code_b,
-        language=language,
-        model_id=model_id,
-        operating_mode=operating_mode,
-        model_labels=model_labels,
-        backend_ready=backend_ready,
-        kpi_slot=kpi_slot,
-        heatmap_slot=heatmap_slot,
-        diff_slot=diff_slot,
-    )
-
-    has_a = bool(code_a.strip())
-    has_b = bool(code_b.strip())
-    saved = st.session_state.get("last_result")
-    last_error = st.session_state.get("last_error")
-
-    hint_a: str | None = None
-    if has_b and not has_a:
-        hint_a = "Add code to Code A to run the comparison."
-    elif saved is not None and bool(saved["result"].get("parse_warnings_a", False)):
-        hint_a = "Syntax error found. Partial tree used."
-
-    hint_b: str | None = None
-    if has_a and not has_b:
-        hint_b = "Add code to Code B to run the comparison."
-    elif saved is not None and bool(saved["result"].get("parse_warnings_b", False)):
-        hint_b = "Syntax error found. Partial tree used."
-
-    if code_inputs_expander.open:
-        if hint_a is not None:
-            with hint_slot_a:
-                _render_inline_hint(hint_a, tone="amber")
-        if hint_b is not None:
-            with hint_slot_b:
-                _render_inline_hint(hint_b, tone="amber")
-    elif hint_a is not None or hint_b is not None:
-        with collapsed_hints_slot.container():
-            if hint_a is not None:
-                _render_inline_hint(f"Code A: {hint_a}", tone="amber")
-            if hint_b is not None:
-                _render_inline_hint(f"Code B: {hint_b}", tone="amber")
-
-    if last_error is not None:
-        status_code, error_detail = last_error
-        with error_slot.container():
-            if status_code == 422:
-                _render_inline_hint(str(error_detail), tone="red")
-            elif status_code == 503:
-                st.error(
-                    f"Model service is not ready (HTTP 503): {error_detail}. "
-                    "Make sure that the backend loaded the model files."
+    with tab_plagiarism:
+        code_inputs_expander = st.expander(
+            "Code Inputs",
+            expanded=False,
+            key="code_inputs_expanded",
+            on_change="rerun",
+        )
+        with code_inputs_expander:
+            editor_col_a, editor_col_b = st.columns(2)
+            with editor_col_a:
+                code_a = st.text_area(
+                    "Code A",
+                    key="code_a",
+                    height=340,
+                    on_change=_on_code_edit,
                 )
-            elif status_code is not None:
-                st.error(f"Backend failed with HTTP {status_code}: {error_detail}")
-            else:
-                st.error(f"Connection to {API_URL} failed: {error_detail}")
+                hint_slot_a = st.empty()
+            with editor_col_b:
+                code_b = st.text_area(
+                    "Code B",
+                    key="code_b",
+                    height=340,
+                    on_change=_on_code_edit,
+                )
+                hint_slot_b = st.empty()
+
+        collapsed_hints_slot = st.empty()
+        error_slot = st.empty()
+
+        st.divider()
+        st.subheader("Analysis Results")
+        left_col, right_col = st.columns(2, gap="large")
+        with left_col:
+            kpi_slot = st.empty()
+        with right_col:
+            heatmap_slot = st.empty()
+
+        st.divider()
+        st.subheader("Code Diff")
+        diff_slot = st.empty()
+
+        _run_analysis_into_slots(
+            code_a=code_a,
+            code_b=code_b,
+            language=language,
+            model_id=model_id,
+            operating_mode=operating_mode,
+            model_labels=model_labels,
+            backend_ready=backend_ready,
+            kpi_slot=kpi_slot,
+            heatmap_slot=heatmap_slot,
+            diff_slot=diff_slot,
+        )
+
+        has_a = bool(code_a.strip())
+        has_b = bool(code_b.strip())
+        saved = st.session_state.get("last_result")
+        last_error = st.session_state.get("last_error")
+
+        hint_a: str | None = None
+        if has_b and not has_a:
+            hint_a = "Add code to Code A to run the comparison."
+        elif saved is not None and bool(saved["result"].get("parse_warnings_a", False)):
+            hint_a = "Syntax error found. Partial tree used."
+
+        hint_b: str | None = None
+        if has_a and not has_b:
+            hint_b = "Add code to Code B to run the comparison."
+        elif saved is not None and bool(saved["result"].get("parse_warnings_b", False)):
+            hint_b = "Syntax error found. Partial tree used."
+
+        if code_inputs_expander.open:
+            if hint_a is not None:
+                with hint_slot_a:
+                    _render_inline_hint(hint_a, tone="amber")
+            if hint_b is not None:
+                with hint_slot_b:
+                    _render_inline_hint(hint_b, tone="amber")
+        elif hint_a is not None or hint_b is not None:
+            with collapsed_hints_slot.container():
+                if hint_a is not None:
+                    _render_inline_hint(f"Code A: {hint_a}", tone="amber")
+                if hint_b is not None:
+                    _render_inline_hint(f"Code B: {hint_b}", tone="amber")
+
+        if last_error is not None:
+            status_code, error_detail = last_error
+            with error_slot.container():
+                if status_code == 422:
+                    _render_inline_hint(str(error_detail), tone="red")
+                elif status_code == 503:
+                    st.error(
+                        f"Model service is not ready (HTTP 503): {error_detail}. "
+                        "Make sure that the backend loaded the model files."
+                    )
+                elif status_code is not None:
+                    st.error(f"Backend failed with HTTP {status_code}: {error_detail}")
+                else:
+                    st.error(f"Connection to {API_URL} failed: {error_detail}")
+
+    with tab_authorship:
+        _render_ai_authorship_tab(
+            authorship_health=authorship_health,
+            operating_mode=operating_mode,
+        )
 
 
 if __name__ == "__main__":

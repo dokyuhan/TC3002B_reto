@@ -1,4 +1,5 @@
 {
+  "task": "pairwise_plagiarism",
   "kind": "lgbm",
   "display_name": "Pairwise LightGBM",
   "artifact": "plagiarism_lgbm.joblib",
