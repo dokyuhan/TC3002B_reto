@@ -120,6 +120,35 @@ BASELINE_METRIC_SPECS: tuple[dict[str, str], ...] = (
 )
 
 
+AI_BASELINE_METRIC_SPECS: tuple[dict[str, str], ...] = (
+    {
+        "key": "perplexity",
+        "label": "AST Perplexity",
+        "format": "float4",
+        "description": (
+            "Predictability of AST structural state transitions. "
+            "[More](https://en.wikipedia.org/wiki/Perplexity)"
+        ),
+        "tooltip": (
+            "Transition perplexity measures how predictable each next AST state "
+            "is under the file's Markov transition matrix.\n\n"
+            "Lower values mean the code follows repetitive, highly predictable "
+            "structural transitions. Higher values mean more varied control flow."
+        ),
+    },
+    {
+        "key": "ast_tokens",
+        "label": "AST Tokens",
+        "format": "int",
+        "description": "Mapped structural syntax nodes extracted from Code.",
+        "tooltip": (
+            "Total number of abstract syntax tree (AST) nodes mapped into the "
+            "12 structural states for Markov transition modeling."
+        ),
+    },
+)
+
+
 def _content_hash(text: str) -> str:
     """Return a deterministic SHA 256 digest for editor content comparison."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -237,12 +266,14 @@ def _extract_error_detail(response: httpx.Response) -> str:
 
 def render_transition_heatmap(
     state_names: list[str],
-    transition_delta: list[list[float]],
+    transition_matrix: list[list[float]],
+    title: str = "AST Transition Delta Heatmap (|P_A - P_B|)",
+    colorbar_label: str = "|P_A - P_B|",
 ) -> plt.Figure:
-    """Render a 12x12 AST transition delta heatmap |P_A - P_B|."""
+    """Render a 12x12 AST transition heatmap (delta |P_A - P_B| or single file P)."""
     size = len(state_names)
     fig, ax = plt.subplots(figsize=(6.8, 5.8))
-    im = ax.imshow(transition_delta, cmap="YlOrRd", aspect="auto", vmin=0.0)
+    im = ax.imshow(transition_matrix, cmap="YlOrRd", aspect="auto", vmin=0.0)
 
     ax.set_xticks(range(size))
     ax.set_yticks(range(size))
@@ -250,15 +281,15 @@ def render_transition_heatmap(
     ax.set_yticklabels(state_names, fontsize=8)
     ax.set_xlabel("Next AST Structural State")
     ax.set_ylabel("Current AST Structural State")
-    ax.set_title("AST Transition Delta Heatmap (|P_A - P_B|)")
+    ax.set_title(title)
 
     max_val = max(
-        (val for row in transition_delta for val in row),
+        (val for row in transition_matrix for val in row),
         default=0.0,
     )
     threshold = max_val * 0.55 if max_val > 0 else 0.5
 
-    for row_idx, row in enumerate(transition_delta):
+    for row_idx, row in enumerate(transition_matrix):
         for col_idx, val in enumerate(row):
             if val >= 0.01:
                 text_color = "white" if val >= threshold else "black"
@@ -273,7 +304,7 @@ def render_transition_heatmap(
                 )
 
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label("|P_A - P_B|")
+    cbar.set_label(colorbar_label)
     fig.tight_layout()
     return fig
 
@@ -579,6 +610,7 @@ def _render_sidebar() -> tuple[str, str, str | None, bool, dict[str, Any]]:
             "Detection Mode",
             options=[MODE_PAIRWISE_PLAGIARISM, MODE_AI_PLAGIARISM],
             key="detection_mode_selector",
+            filter_mode=None,
         )
 
         selected_model_id: str | None = None
@@ -596,6 +628,7 @@ def _render_sidebar() -> tuple[str, str, str | None, bool, dict[str, Any]]:
                     key="pairwise_model_selector",
                     format_func=lambda mid: model_labels.get(mid, mid),
                     help="Select the pairwise plagiarism classifier used for scoring.",
+                    filter_mode=None,
                 )
             else:
                 st.selectbox(
@@ -604,6 +637,7 @@ def _render_sidebar() -> tuple[str, str, str | None, bool, dict[str, Any]]:
                     index=0,
                     disabled=True,
                     help="Available models populate once the backend is ready.",
+                    filter_mode=None,
                 )
 
             selected_meta = model_by_id.get(selected_model_id) if selected_model_id else None
@@ -621,6 +655,7 @@ def _render_sidebar() -> tuple[str, str, str | None, bool, dict[str, Any]]:
                 key="pairwise_language_selector",
                 format_func=lambda lang: lang.upper() if lang == "cpp" else lang.title(),
                 help="Calibrated languages for the selected model.",
+                filter_mode=None,
             )
 
             source_options = [
@@ -633,6 +668,7 @@ def _render_sidebar() -> tuple[str, str, str | None, bool, dict[str, Any]]:
                 options=source_options,
                 key="source_selector",
                 on_change=_on_source_change,
+                filter_mode=None,
             )
 
             if selected_source == UPLOAD_SOURCE_LABEL:
@@ -673,6 +709,7 @@ def _render_sidebar() -> tuple[str, str, str | None, bool, dict[str, Any]]:
                     key="ai_model_selector",
                     format_func=lambda mid: ai_model_labels.get(mid, mid),
                     help="Select the AI plagiarism classifier used for scoring.",
+                    filter_mode=None,
                 )
                 ai_meta = ai_model_by_id.get(selected_model_id) if selected_model_id else None
                 ai_languages = (
@@ -687,6 +724,7 @@ def _render_sidebar() -> tuple[str, str, str | None, bool, dict[str, Any]]:
                     key="ai_language_selector",
                     format_func=lambda lang: lang.upper() if lang == "cpp" else lang.title(),
                     help="Calibrated languages for the selected model.",
+                    filter_mode=None,
                 )
             else:
                 st.selectbox(
@@ -695,6 +733,7 @@ def _render_sidebar() -> tuple[str, str, str | None, bool, dict[str, Any]]:
                     index=0,
                     disabled=True,
                     key="ai_model_selector_disabled",
+                    filter_mode=None,
                 )
                 st.selectbox(
                     "Language",
@@ -703,6 +742,7 @@ def _render_sidebar() -> tuple[str, str, str | None, bool, dict[str, Any]]:
                     disabled=True,
                     key="ai_language_selector_disabled",
                     format_func=lambda lang: lang.upper() if lang == "cpp" else lang.title(),
+                    filter_mode=None,
                 )
 
     return detection_mode, language, selected_model_id, is_green, ai_health
@@ -711,11 +751,14 @@ def _render_sidebar() -> tuple[str, str, str | None, bool, dict[str, Any]]:
 def _render_verdict_kpi(
     prob: float,
     predicted_label: int,
+    positive_label: str = "Plagiarized",
+    negative_label: str = "Clean",
+    prob_label: str = "Plagiarism Probability",
 ) -> None:
-    """Render Verdict and Plagiarism Probability metrics."""
-    is_plag = predicted_label == 1
-    verdict_text = "Plagiarized" if is_plag else "Clean"
-    container_key = "primary_kpi_plag" if is_plag else "primary_kpi_clean"
+    """Render Verdict and Probability metrics with shared color and spacing styles."""
+    is_positive = predicted_label == 1
+    verdict_text = positive_label if is_positive else negative_label
+    container_key = "primary_kpi_plag" if is_positive else "primary_kpi_clean"
 
     st.markdown(
         """
@@ -750,13 +793,15 @@ def _render_verdict_kpi(
     with st.container(key=container_key):
         kpi_col_a, kpi_col_b = st.columns(2, gap="medium")
         kpi_col_a.metric("Verdict", verdict_text)
-        kpi_col_b.metric("Plagiarism Probability", f"{prob * 100:.1f}%")
+        kpi_col_b.metric(prob_label, f"{prob * 100:.1f}%")
 
 
 def _format_metric_value(raw_value: float, fmt: str) -> str:
     """Format a baseline metric value for display."""
     if fmt == "pct":
         return f"{raw_value:.1f}%"
+    if fmt == "int":
+        return f"{int(round(raw_value))}"
     return f"{raw_value:.4f}"
 
 
@@ -802,19 +847,59 @@ def _render_kpi_panel(
                         st.caption(spec["description"])
 
 
-def _render_heatmap_png(result: dict[str, Any]) -> bytes | None:
+def _render_ai_kpi_panel(
+    kpi_slot: Any,
+    result: dict[str, Any],
+) -> None:
+    """Render AI Plagiarism verdict, probability, and single file AST KPIs into a slot."""
+    ai_prob = float(result.get("ai_probability", 0.0))
+    predicted_label = int(result.get("predicted_label", 0))
+
+    with kpi_slot.container():
+        _render_verdict_kpi(
+            prob=ai_prob,
+            predicted_label=predicted_label,
+            positive_label="AI Plagiarized",
+            negative_label="Human Written",
+            prob_label="AI Plagiarism Probability",
+        )
+
+        with st.container(key="baseline_kpi_grid"):
+            row_cols = st.columns(2, gap="medium")
+            for col, spec in zip(row_cols, AI_BASELINE_METRIC_SPECS):
+                val = float(result.get(spec["key"], 0.0))
+                with col:
+                    st.metric(
+                        label=spec["label"],
+                        value=_format_metric_value(val, spec["format"]),
+                        help=spec["tooltip"],
+                    )
+                    st.caption(spec["description"])
+
+
+def _render_heatmap_png(
+    result: dict[str, Any],
+    matrix_key: str = "transition_delta",
+    title: str = "AST Transition Delta Heatmap (|P_A - P_B|)",
+    colorbar_label: str = "|P_A - P_B|",
+) -> bytes | None:
     """Validate transition matrix dimensions and rasterize the heatmap to PNG bytes."""
     state_names = list(result.get("state_names", []))
-    transition_delta = list(result.get("transition_delta", []))
+    matrix = list(result.get(matrix_key, []))
     if not (
         state_names
-        and transition_delta
-        and len(transition_delta) == len(state_names)
-        and all(len(row) == len(state_names) for row in transition_delta)
+        and matrix
+        and len(matrix) == len(state_names)
+        and all(len(row) == len(state_names) for row in matrix)
     ):
         return None
 
-    fig = render_transition_heatmap(state_names, transition_delta)
+    fig = render_transition_heatmap(
+        state_names,
+        matrix,
+        title=title,
+        colorbar_label=colorbar_label,
+    )
     buf = io.BytesIO()
     try:
         fig.savefig(buf, format="png", bbox_inches="tight", dpi=200)
@@ -1126,49 +1211,86 @@ def _render_ai_plagiarism_view(
     language: str,
     model_id: str | None,
 ) -> None:
-    """Render the single file AI Plagiarism main view decoupled from pairwise plagiarism."""
-    if not ai_health.get("model_loaded"):
-        st.caption("No AI plagiarism model is loaded yet.")
-        st.text_area(
-            "Source Code",
-            value="",
-            height=260,
-            disabled=True,
-        )
-        return
+    """Render the AI Plagiarism main view matching Pairwise layout without Code B or Code Diff."""
+    ai_model_loaded = bool(ai_health.get("model_loaded"))
 
-    submission_code = st.text_area(
-        "Source Code",
-        key="ai_plagiarism_code",
-        height=300,
+    code_inputs_expander = st.expander(
+        "Code Inputs",
+        expanded=False,
+        key="ai_code_inputs_expander",
     )
-    if not submission_code.strip():
-        st.caption("Add source code to evaluate AI plagiarism probability.")
+    with code_inputs_expander:
+        submission_code = st.text_area(
+            "Code",
+            key="ai_plagiarism_code",
+            height=340,
+            disabled=not ai_model_loaded,
+        )
+
+    parse_warning_slot = st.empty()
+    error_slot = st.empty()
+
+    st.divider()
+    st.subheader("Analysis Results")
+    left_col, right_col = st.columns(2, gap="large")
+    with left_col:
+        kpi_slot = st.empty()
+    with right_col:
+        heatmap_slot = st.empty()
+
+    if not ai_model_loaded:
+        kpi_slot.caption("No AI plagiarism model is loaded yet.")
+        heatmap_slot.caption("Heatmap unavailable.")
         return
 
-    with st.spinner("Evaluating AI plagiarism..."):
-        result, status_code, error_detail = request_ai_plagiarism_prediction(
-            api_url=API_URL,
-            code=submission_code,
-            language=language,
-            model=model_id,
-        )
+    if not submission_code.strip():
+        kpi_slot.caption("Add Code to view metrics.")
+        heatmap_slot.caption("Add Code to view the heatmap.")
+        return
+
+    result: dict[str, Any] | None = None
+    status_code: int | None = None
+    error_detail: str | None = None
+    with heatmap_slot.spinner("Rendering transition heatmap..."):
+        with kpi_slot.spinner("Evaluating AI plagiarism..."):
+            result, status_code, error_detail = request_ai_plagiarism_prediction(
+                api_url=API_URL,
+                code=submission_code,
+                language=language,
+                model=model_id,
+            )
+            if result is not None:
+                _render_ai_kpi_panel(kpi_slot, result)
+
+        if result is not None:
+            heatmap_png = _render_heatmap_png(
+                result,
+                matrix_key="transition_matrix",
+                title="AST Transition Matrix Heatmap (P)",
+                colorbar_label="P(next | current)",
+            )
+            _paint_heatmap_panel(heatmap_slot, heatmap_png)
 
     if result is None:
-        if status_code == 422:
-            _render_inline_hint(str(error_detail), tone="red")
-        else:
-            st.error(f"AI plagiarism request failed ({status_code}): {error_detail}")
+        kpi_slot.caption("Metrics unavailable.")
+        heatmap_slot.caption("Heatmap unavailable.")
+        with error_slot.container():
+            if status_code == 422:
+                _render_inline_hint(str(error_detail), tone="red")
+            elif status_code == 503:
+                st.error(
+                    f"Model service is not ready (HTTP 503): {error_detail}. "
+                    "Make sure that the backend loaded the model files."
+                )
+            elif status_code is not None:
+                st.error(f"Backend failed with HTTP {status_code}: {error_detail}")
+            else:
+                st.error(f"Connection to {API_URL} failed: {error_detail}")
         return
 
-    ai_prob = float(result.get("ai_probability", 0.0))
-    is_ai = int(result.get("predicted_label", 0)) == 1
-    col_v, col_p, col_perp = st.columns(3)
-    col_v.metric("Verdict", "AI Plagiarized" if is_ai else "Human Written")
-    col_p.metric("AI Plagiarism Probability", f"{ai_prob * 100:.1f}%")
-    col_perp.metric("AST Perplexity", f"{float(result.get('perplexity', 0.0)):.4f}")
     if bool(result.get("parse_warnings", False)):
-        _render_inline_hint("Syntax error found. Partial tree used.", tone="amber")
+        with parse_warning_slot.container():
+            _render_inline_hint("Code: Syntax error found. Partial tree used.", tone="amber")
 
 
 def main() -> None:
