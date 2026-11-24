@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+      - fdmonroy/main
   pull_request:
     branches:
       - main
+      - fdmonroy/main
 
 jobs:
   validate:
@@ -34,7 +36,7 @@ jobs:
 
   deploy:
     needs: validate
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fdmonroy/main')
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Render deploy hook
@@ -45,5 +47,12 @@ jobs:
             echo "RENDER_DEPLOY_HOOK_URL secret is not set; skipping deploy."
             exit 0
           fi
-          curl -fsSL -X POST "${RENDER_DEPLOY_HOOK_URL}"
+          DEPLOY_URL="${RENDER_DEPLOY_HOOK_URL}"
+          if [ "${GITHUB_REF}" = "refs/heads/fdmonroy/main" ]; then
+            case "${DEPLOY_URL}" in
+              *\?*) DEPLOY_URL="${DEPLOY_URL}&ref=${GITHUB_SHA}" ;;
+              *) DEPLOY_URL="${DEPLOY_URL}?ref=${GITHUB_SHA}" ;;
+            esac
+          fi
+          curl -fsSL -X POST "${DEPLOY_URL}"
 
