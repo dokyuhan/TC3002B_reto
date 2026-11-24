@@ -24,7 +24,7 @@ class PlagiarismCNN(nn.Module):
 
     def __init__(
         self,
-        in_channels: int = 1,
+        in_channels: int = 3,
         n_states: int = 12,
         conv_channels: tuple[int, int] = (32, 64),
         hidden_dim: int = 64,
@@ -33,6 +33,10 @@ class PlagiarismCNN(nn.Module):
     ) -> None:
         """Build named layers and record configuration in `self.config`."""
         super().__init__()
+        if int(in_channels) != 3:
+            raise ValueError(
+                f"Expected 3 pairwise channels [P_A, P_B, P_A - P_B], got {in_channels}"
+            )
         c1, c2 = conv_channels
         self.config = {
             "in_channels": int(in_channels),

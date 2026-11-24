@@ -50,7 +50,7 @@ class Predictor:
             return np.empty((0,), dtype=np.float64)
 
         probs_ab = self._predict_raw_proba(arr, batch_size=batch_size)
-        if not symmetric or arr.shape[1] != 3:
+        if not symmetric:
             return probs_ab
 
         probs_ba = self._predict_raw_proba(_swap_pair_channels(arr), batch_size=batch_size)

@@ -14,6 +14,7 @@ INPUT_SPEC = {
 }
 
 N_MATRIX_CHANNELS = 2
+EXPECTED_CHANNELS = 3
 
 
 def validate_transition_matrices(P: np.ndarray, atol: float = 1e-4) -> None:
@@ -32,17 +33,20 @@ def validate_transition_matrices(P: np.ndarray, atol: float = 1e-4) -> None:
 
 
 def validate_features(X: np.ndarray, atol: float = 1e-4) -> None:
-    """Validate `(N, C, K, K)` CNN inputs across base transition and derived difference channels."""
+    """Validate `(N, 3, K, K)` pairwise CNN inputs (`[P_A, P_B, P_A - P_B]`)."""
     X = np.asarray(X)
     if X.ndim != 4:
-        raise ValueError(f"X must be 4D (N, C, K, K), got {X.shape}")
+        raise ValueError(f"X must be 4D (N, 3, K, K), got {X.shape}")
+    if X.shape[1] != EXPECTED_CHANNELS:
+        raise ValueError(
+            f"Expected {EXPECTED_CHANNELS} pairwise channels [P_A, P_B, P_A - P_B], got {X.shape[1]}"
+        )
     if X.shape[2] != X.shape[3]:
         raise ValueError(f"Transition matrices must be square, got {X.shape[2:]}")
     if X.shape[0] == 0:
         return
-    for c in range(min(X.shape[1], N_MATRIX_CHANNELS)):
+    for c in range(N_MATRIX_CHANNELS):
         validate_transition_matrices(X[:, c], atol=atol)
-    if X.shape[1] > N_MATRIX_CHANNELS:
-        extra = np.asarray(X[:, N_MATRIX_CHANNELS:], dtype=np.float64)
-        if not np.isfinite(extra).all() or extra.min() < -1 - atol or extra.max() > 1 + atol:
-            raise ValueError("Derived difference channels must be finite and within [-1, 1]")
+    diff = np.asarray(X[:, N_MATRIX_CHANNELS], dtype=np.float64)
+    if not np.isfinite(diff).all() or diff.min() < -1 - atol or diff.max() > 1 + atol:
+        raise ValueError("Signed difference channel must be finite and within [-1, 1]")

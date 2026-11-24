@@ -90,7 +90,9 @@ def run_inference(
         if criterion is not None:
             total += criterion(logits, y).item() * len(y)
         p_ab = torch.sigmoid(logits)
-        if symmetric and X.ndim == 4 and X.shape[1] == 3:
+        if symmetric:
+            if X.ndim != 4 or X.shape[1] != 3:
+                raise ValueError(f"Symmetric inference requires (B, 3, K, K) tensors, got {tuple(X.shape)}")
             swapped = torch.stack([X[:, 1], X[:, 0], -X[:, 2]], dim=1)
             p_ba = torch.sigmoid(model(swapped))
             batch_probs = 0.5 * (p_ab + p_ba)
