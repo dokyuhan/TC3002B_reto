@@ -502,7 +502,7 @@ def _poll_api_status_until_ready() -> None:
         st.rerun()
 
 
-def _render_sidebar() -> tuple[str, str | None, str, dict[str, str]]:
+def _render_sidebar() -> tuple[str, str | None, str, dict[str, str], bool]:
     """Render sidebar API status, controls, and conditional file uploaders."""
     health, health_error = fetch_backend_health(API_URL)
     color, tooltip, is_green = _classify_health(health, health_error)
@@ -571,7 +571,7 @@ def _render_sidebar() -> tuple[str, str | None, str, dict[str, str]]:
             help="Balanced maximizes F1; Low FPR targets <= 5% false positive rate.",
         )
 
-        language_options = list(dict.fromkeys(["java", *supported_languages]))
+        language_options = list(dict.fromkeys(supported_languages)) or ["java"]
         language = st.selectbox(
             "Language",
             options=language_options,
@@ -619,7 +619,7 @@ def _render_sidebar() -> tuple[str, str | None, str, dict[str, str]]:
                     st.session_state["baseline_hash_b"] = _content_hash(decoded_b)
                     st.session_state["last_upload_b"] = upload_token_b
 
-    return language, selected_model_id, operating_mode, model_labels
+    return language, selected_model_id, operating_mode, model_labels, is_green
 
 
 def _render_verdict_kpi(
@@ -806,6 +806,43 @@ def _render_unavailable_placeholders(
     diff_slot.caption("Diff unavailable.")
 
 
+def _fetch_and_render_kpi(
+    kpi_slot: Any,
+    code_a: str,
+    code_b: str,
+    language: str,
+    model_id: str | None,
+    operating_mode: str,
+    predict_key: Any,
+    model_labels: dict[str, str],
+) -> dict[str, Any] | None:
+    """Call POST /predict, update prediction cache state, and render KPI panel on success."""
+    result, status_code, error_detail = request_prediction(
+        api_url=API_URL,
+        code_a=code_a,
+        code_b=code_b,
+        language=language,
+        operating_mode=operating_mode,
+        model=model_id,
+    )
+    if result is not None:
+        st.session_state["last_predict_key"] = predict_key
+        st.session_state["last_result"] = {
+            "result": result,
+            "code_a": code_a,
+            "code_b": code_b,
+            "language": language,
+        }
+        st.session_state["last_error"] = None
+        _render_kpi_panel(kpi_slot, result, model_labels)
+        return result
+
+    st.session_state["last_predict_key"] = None
+    st.session_state["last_result"] = None
+    st.session_state["last_error"] = (status_code, error_detail)
+    return None
+
+
 def _run_analysis_into_slots(
     code_a: str,
     code_b: str,
@@ -813,6 +850,7 @@ def _run_analysis_into_slots(
     model_id: str | None,
     operating_mode: str,
     model_labels: dict[str, str],
+    backend_ready: bool,
     kpi_slot: Any,
     heatmap_slot: Any,
     diff_slot: Any,
@@ -849,66 +887,46 @@ def _run_analysis_into_slots(
             _paint_diff_panel(diff_slot, views["diff_payload"])
             return
 
+    if not backend_ready:
+        st.session_state["last_predict_key"] = None
+        st.session_state["last_result"] = None
+        st.session_state["last_error"] = (503, "Model service is warming up or unavailable.")
+        _render_unavailable_placeholders(kpi_slot, heatmap_slot, diff_slot)
+        return
+
     if pair_cached:
         views = st.session_state["cached_pair_views"]
         _paint_heatmap_panel(heatmap_slot, views["heatmap_png"])
         _paint_diff_panel(diff_slot, views["diff_payload"])
         with kpi_slot.spinner("Computing analysis metrics..."):
-            result, status_code, error_detail = request_prediction(
-                api_url=API_URL,
+            result = _fetch_and_render_kpi(
+                kpi_slot=kpi_slot,
                 code_a=code_a,
                 code_b=code_b,
                 language=language,
+                model_id=model_id,
                 operating_mode=operating_mode,
-                model=model_id,
+                predict_key=predict_key,
+                model_labels=model_labels,
             )
-            if result is not None:
-                st.session_state["last_predict_key"] = predict_key
-                st.session_state["last_result"] = {
-                    "result": result,
-                    "code_a": code_a,
-                    "code_b": code_b,
-                    "language": language,
-                }
-                st.session_state["last_error"] = None
-                _render_kpi_panel(kpi_slot, result, model_labels)
-            else:
-                st.session_state["last_predict_key"] = None
-                st.session_state["last_result"] = None
-                st.session_state["last_error"] = (status_code, error_detail)
+            if result is None:
                 kpi_slot.caption("Metrics unavailable.")
         return
 
     result: dict[str, Any] | None = None
-    status_code: int | None = None
-    error_detail: str | None = None
-
     with diff_slot.spinner("Preparing code diff..."):
         with heatmap_slot.spinner("Rendering transition heatmap..."):
             with kpi_slot.spinner("Computing analysis metrics..."):
-                result, status_code, error_detail = request_prediction(
-                    api_url=API_URL,
+                result = _fetch_and_render_kpi(
+                    kpi_slot=kpi_slot,
                     code_a=code_a,
                     code_b=code_b,
                     language=language,
+                    model_id=model_id,
                     operating_mode=operating_mode,
-                    model=model_id,
+                    predict_key=predict_key,
+                    model_labels=model_labels,
                 )
-
-                if result is not None:
-                    st.session_state["last_predict_key"] = predict_key
-                    st.session_state["last_result"] = {
-                        "result": result,
-                        "code_a": code_a,
-                        "code_b": code_b,
-                        "language": language,
-                    }
-                    st.session_state["last_error"] = None
-                    _render_kpi_panel(kpi_slot, result, model_labels)
-                else:
-                    st.session_state["last_predict_key"] = None
-                    st.session_state["last_result"] = None
-                    st.session_state["last_error"] = (status_code, error_detail)
 
             heatmap_png: bytes | None = None
             if result is not None:
@@ -936,7 +954,7 @@ def main() -> None:
     )
     _init_session_state()
 
-    language, model_id, operating_mode, model_labels = _render_sidebar()
+    language, model_id, operating_mode, model_labels, backend_ready = _render_sidebar()
 
     st.title("Code Plagiarism Detector")
 
@@ -987,6 +1005,7 @@ def main() -> None:
         model_id=model_id,
         operating_mode=operating_mode,
         model_labels=model_labels,
+        backend_ready=backend_ready,
         kpi_slot=kpi_slot,
         heatmap_slot=heatmap_slot,
         diff_slot=diff_slot,

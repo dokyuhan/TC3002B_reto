@@ -1,6 +1,6 @@
 """Generate publication quality evaluation plots from metrics_summary.json.
 
-Reads strictly from docs/evaluation/metrics_summary.json and outputs 5 PNG
+Reads strictly from docs/evaluation/metrics_summary.json and outputs up to 7 PNG
 figures into docs/evaluation/figures/ using the non-interactive matplotlib Agg backend.
 """
 
@@ -401,7 +401,7 @@ def plot_boilerplate_ablation(data: dict[str, Any], out_path: Path) -> None:
         x + width / 2,
         v1_f1,
         width,
-        label="ConPlag v1 (Zero-Shot F1)",
+        label="ConPlag v1 (5-Fold OOF F1)",
         color="#62b6cb",
         edgecolor="#1b4965",
         linewidth=0.7,
@@ -419,9 +419,10 @@ def plot_boilerplate_ablation(data: dict[str, Any], out_path: Path) -> None:
             fontweight="bold",
         )
 
+    best_abs_shift = min(abs(s) for s in shifts)
     for idx, shift_val in enumerate(shifts):
         top_y = max(v2_f1[idx], v1_f1[idx]) + 0.06
-        badge_color = "#2a9d8f" if idx == 0 else "#c1121f"
+        badge_color = "#2a9d8f" if abs(shift_val) <= best_abs_shift + 1e-12 else "#c1121f"
         ax_left.annotate(
             f"Shift: {shift_val * 100:+.2f}%",
             xy=(x[idx], top_y),
@@ -485,7 +486,8 @@ def plot_boilerplate_ablation(data: dict[str, Any], out_path: Path) -> None:
 
     ax_right.set_xticks(x_m)
     ax_right.set_xticklabels(short_labels)
-    ax_right.set_ylim(-13.2, 1.2)
+    min_shift = min(shifts_t + shifts_f)
+    ax_right.set_ylim(min(min_shift - 2.2, -13.5), 1.2)
     ax_right.set_ylabel("Cross-Domain F1 Shift: (v1 - v2) in Percentage Points")
     ax_right.set_title("Cross-Domain F1 Drop Across All Models (Closer to 0% is Better)")
     ax_right.legend(loc="lower right", fontsize=8.5)
@@ -503,10 +505,10 @@ def plot_confusion_matrices(data: dict[str, Any], out_path: Path) -> None:
     lgbm_ir = data["ir_plag_zero_shot"]["pairwise_lgbm"]["at_threshold"]
 
     panels = [
-        ("ConPlag v2 OOF\n(Balanced, thr=0.3555)", lgbm_v2_bal),
-        ("ConPlag v2 OOF\n(Low-FPR, thr=0.5210)", lgbm_v2_low),
-        ("ConPlag v1 Zero-Shot\n(strip=True, thr=0.3555)", lgbm_v1),
-        ("IR-Plag Zero-Shot\n(Balanced, thr=0.3555)", lgbm_ir),
+        (f"ConPlag v2 OOF\n(Balanced, thr={lgbm_v2_bal['threshold']:.4f})", lgbm_v2_bal),
+        (f"ConPlag v2 OOF\n(Low-FPR, thr={lgbm_v2_low['threshold']:.4f})", lgbm_v2_low),
+        (f"ConPlag v1 5-Fold OOF\n(strip=True, thr={lgbm_v1['threshold']:.4f})", lgbm_v1),
+        (f"IR-Plag Zero-Shot\n(Balanced, thr={lgbm_ir['threshold']:.4f})", lgbm_ir),
     ]
 
     fig, axes = plt.subplots(1, 4, figsize=(15.2, 4.3))

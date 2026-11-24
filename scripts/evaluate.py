@@ -207,22 +207,39 @@ def _evaluate_conplag_v2_cv(
 
 def _score_oof_cross_domain(
     fold_models: dict[int, dict[str, object]],
-    dataset: PreparedDataset,
+    source_dataset: PreparedDataset,
+    target_dataset: PreparedDataset,
 ) -> dict[str, np.ndarray]:
-    """Score ConPlag v1 strictly out of fold using the matching ConPlag v2 fold model."""
-    n_samples = dataset.y.shape[0]
+    """Score ConPlag v1 strictly out of fold after asserting group fold parity with ConPlag v2."""
+    source_group_to_fold: dict[object, int] = {}
+    for gid, fid in zip(source_dataset.group_ids, source_dataset.fold_ids):
+        fid_int = int(fid)
+        prev = source_group_to_fold.get(gid)
+        if prev is not None and prev != fid_int:
+            raise ValueError(f"Source group '{gid}' spans multiple folds ({prev} vs {fid_int})")
+        source_group_to_fold[gid] = fid_int
+
+    for gid, fid in zip(target_dataset.group_ids, target_dataset.fold_ids):
+        expected_fid = source_group_to_fold.get(gid)
+        if expected_fid is None or expected_fid != int(fid):
+            raise ValueError(
+                f"Target group '{gid}' fold_id ({int(fid)}) does not match source ({expected_fid})"
+            )
+
+    n_samples = target_dataset.y.shape[0]
     scores: dict[str, np.ndarray] = {
         name: np.zeros(n_samples, dtype=np.float64) for name in MODEL_ORDER
     }
-    scores["markov_jsd"] = _markov_jsd_scores(dataset.X)
-    scores["markov_frobenius"] = _markov_frobenius_scores(dataset.X)
+    scores["markov_jsd"] = _markov_jsd_scores(target_dataset.X)
+    scores["markov_frobenius"] = _markov_frobenius_scores(target_dataset.X)
+    scored_mask = np.zeros(n_samples, dtype=bool)
 
     for fold, models in fold_models.items():
-        mask = dataset.fold_ids == fold
+        mask = target_dataset.fold_ids == fold
         if not np.any(mask):
             continue
-        codes_a = [c for c, m in zip(dataset.codes_a, mask) if m]
-        codes_b = [c for c, m in zip(dataset.codes_b, mask) if m]
+        codes_a = [c for c, m in zip(target_dataset.codes_a, mask) if m]
+        codes_b = [c for c, m in zip(target_dataset.codes_b, mask) if m]
         raw_tfidf: TfidfCosineBaseline = models["raw_tfidf"]  # type: ignore[assignment]
         sub_tfidf: TfidfCosineBaseline = models["sublinear_tfidf"]  # type: ignore[assignment]
         lgbm: PairwisePlagiarismClassifier = models["pairwise_lgbm"]  # type: ignore[assignment]
@@ -230,11 +247,37 @@ def _score_oof_cross_domain(
         scores["raw_tfidf"][mask] = raw_tfidf.score_pairs(codes_a, codes_b)
         scores["sublinear_tfidf"][mask] = sub_tfidf.score_pairs(codes_a, codes_b)
         scores["pairwise_lgbm"][mask] = lgbm.predict_proba(
-            dataset.X[mask],
-            perplexities=(dataset.perp_a[mask], dataset.perp_b[mask]),
+            target_dataset.X[mask],
+            perplexities=(target_dataset.perp_a[mask], target_dataset.perp_b[mask]),
         )[:, 1]
+        scored_mask |= mask
+
+    if not np.all(scored_mask):
+        missing_count = int(np.sum(~scored_mask))
+        raise ValueError(f"ConPlag v1 OOF scoring left {missing_count} rows unscored")
 
     return scores
+
+
+def _build_v1_shift_results(
+    v2_cv: dict[str, dict[str, object]],
+    v1_dataset: PreparedDataset,
+    v1_scores: dict[str, np.ndarray],
+) -> dict[str, dict[str, object]]:
+    """Compute ConPlag v2 to v1 OOF F1 shift metrics across all 5 evaluated models."""
+    results: dict[str, dict[str, object]] = {}
+    for name in MODEL_ORDER:
+        thr = float(v2_cv[name]["threshold"])
+        m_v1 = compute_binary_metrics(v1_dataset.y, v1_scores[name], threshold=thr)
+        v2_f1 = float(v2_cv[name]["micro_oof"]["f1"])  # type: ignore[index]
+        f1_shift = float(m_v1["f1"]) - v2_f1
+        results[name] = {
+            "v2_oof_f1": v2_f1,
+            "f1_shift": f1_shift,
+            "abs_f1_shift": abs(f1_shift),
+            "metrics": m_v1,
+        }
+    return results
 
 
 def _evaluate_held_out_cnn_comparison(
@@ -569,19 +612,8 @@ def run_evaluation(
     v2_cv_stripped, fitted_stripped, fold_models_stripped = _evaluate_conplag_v2_cv(v2_stripped)
 
     # Problem-disjoint out-of-fold evaluation on ConPlag v1 (strip_boilerplate=True).
-    v1_scores_stripped = _score_oof_cross_domain(fold_models_stripped, v1_stripped)
-    v1_stripped_results: dict[str, dict[str, object]] = {}
-    for name in MODEL_ORDER:
-        thr = float(v2_cv_stripped[name]["threshold"])
-        m_v1 = compute_binary_metrics(v1_stripped.y, v1_scores_stripped[name], threshold=thr)
-        v2_f1 = float(v2_cv_stripped[name]["micro_oof"]["f1"])  # type: ignore[index]
-        f1_shift = float(m_v1["f1"]) - v2_f1
-        v1_stripped_results[name] = {
-            "v2_oof_f1": v2_f1,
-            "f1_shift": f1_shift,
-            "abs_f1_shift": abs(f1_shift),
-            "metrics": m_v1,
-        }
+    v1_scores_stripped = _score_oof_cross_domain(fold_models_stripped, v2_stripped, v1_stripped)
+    v1_stripped_results = _build_v1_shift_results(v2_cv_stripped, v1_stripped, v1_scores_stripped)
 
     # Boilerplate ablation: train on ConPlag v2 (strip=False) and score ConPlag v1 out of fold.
     v2_unstripped = prepare_manifest_dataset(
@@ -597,19 +629,12 @@ def run_evaluation(
         smoothing_alpha=smoothing_alpha,
     )
     v2_cv_unstripped, _, fold_models_unstripped = _evaluate_conplag_v2_cv(v2_unstripped)
-    v1_scores_unstripped = _score_oof_cross_domain(fold_models_unstripped, v1_unstripped)
-    v1_unstripped_results: dict[str, dict[str, object]] = {}
-    for name in MODEL_ORDER:
-        thr = float(v2_cv_unstripped[name]["threshold"])
-        m_v1 = compute_binary_metrics(v1_unstripped.y, v1_scores_unstripped[name], threshold=thr)
-        v2_f1 = float(v2_cv_unstripped[name]["micro_oof"]["f1"])  # type: ignore[index]
-        f1_shift = float(m_v1["f1"]) - v2_f1
-        v1_unstripped_results[name] = {
-            "v2_oof_f1": v2_f1,
-            "f1_shift": f1_shift,
-            "abs_f1_shift": abs(f1_shift),
-            "metrics": m_v1,
-        }
+    v1_scores_unstripped = _score_oof_cross_domain(
+        fold_models_unstripped, v2_unstripped, v1_unstripped
+    )
+    v1_unstripped_results = _build_v1_shift_results(
+        v2_cv_unstripped, v1_unstripped, v1_scores_unstripped
+    )
 
     # Zero-shot evaluation on IR-Plag (strip_boilerplate=True).
     ir_scores = _score_all_models(fitted_stripped, ir_stripped)
