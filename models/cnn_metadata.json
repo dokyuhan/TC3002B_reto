@@ -1,14 +1,16 @@
 {
-  "smoothing_alpha": 0.01,
+  "kind": "cnn",
+  "display_name": "Pairwise CNN",
+  "artifact": "cnn_weights.npz",
+  "model_version": "0.2.0-cnn",
+  "threshold": 0.5,
+  "threshold_low_fpr": 0.5,
+  "smoothing_alpha": 0.0,
   "num_states": 12,
   "strip_boilerplate": true,
   "supported_languages": [
     "java"
   ],
-  "model_version": "0.2.0-cnn",
-  "classifier": "cnn",
-  "threshold": 0.5,
-  "threshold_low_fpr": 0.5,
   "cnn_metrics": {
     "balanced_val": {
       "threshold": 0.5,

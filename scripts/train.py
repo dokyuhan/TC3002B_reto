@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-import json
 from pathlib import Path
 import joblib
 import numpy as np
@@ -21,6 +20,7 @@ from sklearn.metrics import (
 from src.features.markov import pair_to_tensor
 from src.models.baseline import TfidfCosineBaseline, transition_perplexity
 from src.models.classifier import PairwisePlagiarismClassifier
+from src.models.registry import ensure_manifest_entry, write_model_metadata
 from src.preprocessing.normalizer import NUM_STATES, normalize_source
 from src.preprocessing.parser import parse_to_state_sequence
 
@@ -285,12 +285,16 @@ def train_and_save_bundle(
     models_dir.mkdir(parents=True, exist_ok=True)
     lgbm_path = models_dir / "plagiarism_lgbm.joblib"
     tfidf_path = models_dir / "tfidf_baseline.joblib"
-    meta_path = models_dir / "model_metadata.json"
+    meta_filename = "lgbm_metadata.json"
+    meta_path = models_dir / meta_filename
 
     joblib.dump(final_clf, lgbm_path, compress=3)
     joblib.dump(final_tfidf, tfidf_path, compress=3)
 
     metadata: dict[str, object] = {
+        "kind": "lgbm",
+        "display_name": "Pairwise LightGBM",
+        "artifact": lgbm_path.name,
         "model_version": MODEL_VERSION,
         "threshold": threshold,
         "threshold_low_fpr": threshold_low_fpr,
@@ -300,7 +304,13 @@ def train_and_save_bundle(
         "supported_languages": ["java"],
         "cv_metrics": cv_metrics,
     }
-    meta_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    write_model_metadata(meta_path, metadata)
+    ensure_manifest_entry(
+        models_dir,
+        model_id="lgbm",
+        metadata_filename=meta_filename,
+        num_states=int(NUM_STATES),
+    )
 
     sizes = {
         lgbm_path.name: lgbm_path.stat().st_size,
@@ -310,7 +320,7 @@ def train_and_save_bundle(
     total_bytes = sum(sizes.values())
     if total_bytes >= MAX_BUNDLE_BYTES:
         raise RuntimeError(
-            f"Serialized model bundle exceeds 1 MB limit: {total_bytes} bytes ({sizes})"
+            f"Serialized LightGBM artifact set exceeds 1 MB limit: {total_bytes} bytes ({sizes})"
         )
 
     return {

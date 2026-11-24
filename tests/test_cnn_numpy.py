@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -12,8 +11,10 @@ import pytest
 
 from src.api.main import app
 from src.features.markov import sequence_to_transition_matrix
+from src.inference import analyze_pair, load_model_bundle
 from src.models.baseline import TfidfCosineBaseline
 from src.models.cnn_numpy import NumpyCnnClassifier, _adaptive_avg_pool, _conv3x3, _max_pool2
+from src.models.registry import ensure_manifest_entry, write_model_metadata
 
 REPO_MODELS = Path(__file__).resolve().parents[1] / "models"
 K = 12
@@ -42,12 +43,12 @@ public class Accumulator {
 
 
 def _random_weights(seed: int = 0) -> dict[str, np.ndarray]:
-    """Random weights with the shapes of the trained network (3 -> 32 -> 64 -> 64 -> 1)."""
+    """Random weights with the shapes of the trained network (3 -> 16 -> 32 -> 64 -> 1)."""
     rng = np.random.default_rng(seed)
     shapes = {
-        "conv1_w": (32, 3, 3, 3), "conv1_b": (32,),
-        "conv2_w": (64, 32, 3, 3), "conv2_b": (64,),
-        "fc1_w": (64, 64 * 4 * 4), "fc1_b": (64,),
+        "conv1_w": (16, 3, 3, 3), "conv1_b": (16,),
+        "conv2_w": (32, 16, 3, 3), "conv2_b": (32,),
+        "fc1_w": (64, 32 * 4 * 4), "fc1_b": (64,),
         "fc2_w": (1, 64), "fc2_b": (1,),
     }
     return {k: rng.normal(0.0, 0.1, size=s).astype(np.float32) for k, s in shapes.items()}
@@ -150,17 +151,36 @@ def test_empty_batch_and_extreme_logit_stability() -> None:
 
 @pytest.fixture()
 def cnn_model_dir(tmp_path: Path) -> Path:
-    """Model dir with random CNN weights to test the CNN loading path."""
-    np.savez(tmp_path / "cnn_weights.npz", **_random_weights(), n_states=np.int64(K), pool_size=np.int64(4))
+    """Model dir with random CNN weights and manifest to test the CNN loading path."""
+    np.savez(
+        tmp_path / "cnn_weights.npz",
+        **_random_weights(),
+        n_states=np.int64(K),
+        pool_size=np.int64(4),
+    )
     baseline = TfidfCosineBaseline(max_features=256)
     baseline.fit([JAVA_A, JAVA_B, "class Helper { int x = 1; }"])
     joblib.dump(baseline, tmp_path / "tfidf_baseline.joblib")
-    meta = {
-        "model_version": "0.0.0-cnn-test", "threshold": 0.5, "threshold_low_fpr": 0.6,
-        "smoothing_alpha": 0.01, "num_states": K, "strip_boilerplate": True,
+    meta: dict[str, object] = {
+        "kind": "cnn",
+        "display_name": "Pairwise CNN",
+        "artifact": "cnn_weights.npz",
+        "model_version": "0.0.0-cnn-test",
+        "threshold": 0.5,
+        "threshold_low_fpr": 0.6,
+        "smoothing_alpha": 0.0,
+        "num_states": K,
+        "strip_boilerplate": True,
         "supported_languages": ["java"],
     }
-    (tmp_path / "model_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    write_model_metadata(tmp_path / "cnn_metadata.json", meta)
+    ensure_manifest_entry(
+        tmp_path,
+        model_id="cnn",
+        metadata_filename="cnn_metadata.json",
+        num_states=K,
+        default_model="cnn",
+    )
     return tmp_path
 
 
@@ -192,12 +212,21 @@ def test_cnn_input_matches_training_features() -> None:
 
 @pytest.mark.skipif(not (REPO_MODELS / "cnn_weights.npz").is_file(), reason="trained CNN not exported")
 def test_real_exported_model_serves_predictions(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The committed models/ directory loads the real CNN and answers /predict."""
+    """The committed models/ directory loads both registered models and serves predictions."""
+    bundle = load_model_bundle(REPO_MODELS)
+    assert bundle.model_loaded is True
+    assert "cnn" in bundle.models
+    assert "lgbm" in bundle.models
+
+    cnn_analysis = analyze_pair(bundle, JAVA_A, JAVA_B, model_id="cnn")
+    assert cnn_analysis.model_used == "cnn"
+    assert cnn_analysis.model_version.endswith("cnn")
+    assert 0.0 <= cnn_analysis.plagiarism_probability <= 1.0
+    assert cnn_analysis.threshold_used == pytest.approx(0.5)
+
     monkeypatch.setenv("MODEL_DIR", str(REPO_MODELS))
     with TestClient(app) as client:
         health = client.get("/health").json()
         body = client.post("/predict", json={"code_a": JAVA_A, "code_b": JAVA_B}).json()
     assert health["model_loaded"] is True
-    assert health["model_version"].endswith("cnn")
     assert 0.0 <= body["plagiarism_probability"] <= 1.0
-    assert body["threshold_used"] == pytest.approx(0.5)
