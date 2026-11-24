@@ -1,0 +1,24 @@
+{
+  "threshold": 0.5,
+  "n_samples": 181,
+  "accuracy": 0.9005524861878453,
+  "precision": 0.9375,
+  "recall": 0.6521739130434783,
+  "f1": 0.7692307692307693,
+  "false_positive_rate": 0.014814814814814815,
+  "pr_auc": 0.8743698133110491,
+  "class_names": {
+    "0": "humano",
+    "1": "IA"
+  },
+  "confusion_matrix": [
+    [
+      133,
+      2
+    ],
+    [
+      16,
+      30
+    ]
+  ]
+}

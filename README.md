@@ -31,7 +31,7 @@ The label the model learns is "plagiarized pair" (ConPlag verdicts and IR Plag c
 * `models/`: Stores the trained files the app loads (`cnn_weights.npz`, `tfidf_baseline.joblib`, `model_metadata.json`).
 * `model_training/`: Trains and evaluates the CNN with PyTorch and exports its weights to `models/`. See its [README](model_training/README.md).
 * `scripts/`: Builds the preprocessed datasets and fits the TF-IDF baseline.
-* `dataset/`: Holds `raw/` (ConPlag and IR Plag pairs), `preprocessed/` (AST sequences), `processed/` (CNN input matrices, generated, not committed) and `results/` (training metrics, generated, not committed).
+* `dataset/`: Holds `raw/` (ConPlag and IR Plag pairs), `preprocessed/` (AST sequences), `processed/` (CNN input matrices, regenerated with `build-data`) and `results/` (training history and metrics).
 * `docs/`: Stores the architecture diagram.
 * `tests/`: Runs unit and API tests.
 

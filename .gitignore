@@ -44,6 +44,7 @@ pnpm-debug.log*
 *.npz
 !dataset/preprocessed/*.npz
 !models/cnn_weights.npz
+!dataset/processed/*.npz
 *.npy
 *.parquet
 !dataset/preprocessed/*.parquet
@@ -55,9 +56,6 @@ pnpm-debug.log*
 data/raw/
 data/interim/
 data/processed/
-dataset/processed/
-dataset/results/*.json
-dataset/results/**/*.json
 *.zarr/
 *.h5
 *.keras
@@ -66,7 +64,8 @@ dataset/results/**/*.json
 *.onnx
 *.pkl
 *.joblib
-checkpoints/
+checkpoints/*
+!model_training/checkpoints/best.pt
 runs/
 mlruns/
 wandb/
