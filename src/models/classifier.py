@@ -90,6 +90,16 @@ class PairwisePlagiarismClassifier:
         self._num_states: int | None = None
         self._n_features: int | None = None
 
+    @property
+    def num_states(self) -> int | None:
+        """Return the AST state count used when fitting, or None if unfitted."""
+        return self._num_states
+
+    @property
+    def is_fitted(self) -> bool:
+        """Return True when the calibrated estimator has been fitted."""
+        return self._model is not None
+
     def extract_features(
         self,
         X: np.ndarray,

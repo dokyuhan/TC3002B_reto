@@ -79,6 +79,7 @@ def run_inference(
     loader: DataLoader,
     device: torch.device,
     criterion: nn.Module | None = None,
+    symmetric: bool = False,
 ) -> tuple[float | None, np.ndarray, np.ndarray]:
     """Run eval mode forward pass and return `(mean_loss_or_None, probabilities, labels)`."""
     model.eval()
@@ -88,7 +89,14 @@ def run_inference(
         logits = model(X)
         if criterion is not None:
             total += criterion(logits, y).item() * len(y)
-        probs.append(torch.sigmoid(logits).cpu().numpy())
+        p_ab = torch.sigmoid(logits)
+        if symmetric and X.ndim == 4 and X.shape[1] == 3:
+            swapped = torch.stack([X[:, 1], X[:, 0], -X[:, 2]], dim=1)
+            p_ba = torch.sigmoid(model(swapped))
+            batch_probs = 0.5 * (p_ab + p_ba)
+        else:
+            batch_probs = p_ab
+        probs.append(batch_probs.cpu().numpy())
         ys.append(y.cpu().numpy())
     probs_arr = np.concatenate(probs)
     ys_arr = np.concatenate(ys)

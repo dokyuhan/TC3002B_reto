@@ -63,7 +63,7 @@ def train() -> None:
 
     history, best_epoch = fit(model, train_loader, val_loader, cfg, device, config.CHECKPOINT_PATH)
 
-    _, val_probs, val_y = run_inference(model, val_loader, device)
+    _, val_probs, val_y = run_inference(model, val_loader, device, symmetric=True)
     threshold = select_threshold(val_y, val_probs)
     save_checkpoint(
         config.CHECKPOINT_PATH,

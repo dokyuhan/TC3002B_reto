@@ -74,6 +74,12 @@ class NumpyCnnClassifier:
     def load(cls, path: str | Path) -> NumpyCnnClassifier:
         """Load weights exported by `model_training/export_numpy.py`."""
         with np.load(path, allow_pickle=False) as data:
+            missing_weights = [k for k in _WEIGHT_KEYS if k not in data.files]
+            if missing_weights:
+                raise ValueError(f"Missing CNN weights: {missing_weights}")
+            missing_meta = [k for k in ("n_states", "pool_size") if k not in data.files]
+            if missing_meta:
+                raise ValueError(f"Missing CNN metadata keys: {missing_meta}")
             weights = {k: data[k] for k in _WEIGHT_KEYS}
             return cls(weights, n_states=int(data["n_states"]), pool_size=int(data["pool_size"]))
 
@@ -105,9 +111,15 @@ class NumpyCnnClassifier:
         """Return permutation symmetric `P(plagiarism)` for batches of `(N, K, K)` matrices."""
         p_a = np.asarray(p_a, dtype=np.float32)
         p_b = np.asarray(p_b, dtype=np.float32)
-        if p_a.ndim != 3 or p_b.ndim != 3 or p_a.shape != p_b.shape:
+        if (
+            p_a.ndim != 3
+            or p_b.ndim != 3
+            or p_a.shape != p_b.shape
+            or p_a.shape[1:] != (self.n_states, self.n_states)
+        ):
             raise ValueError(
-                f"Expected matching 3D arrays (N, K, K), got {p_a.shape} and {p_b.shape}"
+                f"Expected matching (N, {self.n_states}, {self.n_states}) arrays, "
+                f"got {p_a.shape} and {p_b.shape}"
             )
         if p_a.shape[0] == 0:
             return np.empty((0,), dtype=np.float64)
