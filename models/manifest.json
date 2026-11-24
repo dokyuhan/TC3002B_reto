@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "default_model": "lgbm",
+  "num_states": 12,
+  "diagnostic_smoothing_alpha": 0.01,
+  "tfidf_artifact": "tfidf_baseline.joblib",
+  "models": {
+    "lgbm": "lgbm_metadata.json",
+    "cnn": "cnn_metadata.json"
+  }
+}
