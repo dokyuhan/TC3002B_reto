@@ -19,18 +19,18 @@ The project team has 3 members:
    * **Pairwise CNN (`cnn`, selectable):** Compact PyTorch trained, NumPy evaluated CNN on unsmoothed (`alpha = 0.0`) 3 channel tensors `[P_A, P_B, P_A - P_B]`, symmetrized across `(A, B)` and `(B, A)`.
 4. **Compare.** Alongside the verdict and active decision threshold, the dashboard reports model agnostic Markov similarity (Jensen Shannon divergence), Frobenius distance, a character n gram TF IDF cosine baseline, an AST transition delta heatmap, and a side by side code diff.
 
-Both models learn binary pairwise plagiarism labels (ConPlag verdicts and IR Plag cases), not AI authorship labels.
+Both models learn binary pairwise plagiarism labels (ConPlag verdicts and IR Plag cases), not single file AI plagiarism labels.
 
 ## Repository structure
 
 * `src/vocabulary.py`: Defines the 12 AST states and supported languages.
 * `src/preprocessing/`: Normalizes source code and parses files into AST state sequences.
 * `src/features/`: Builds Markov transition matrices and pairwise tensors.
-* `src/models/`: Implements similarity baselines (`baseline.py`), LightGBM classifier (`classifier.py`), NumPy CNN forward pass (`cnn_numpy.py`), the task isolated `pairwise_plagiarism` registry (`registry.py`), and the `ai_authorship` scorer contract (`authorship.py`).
-* `src/inference.py`: Loads isolated `pairwise_plagiarism` and `ai_authorship` task bundles and runs inference in memory.
-* `src/api/`: Exposes FastAPI endpoints (`/health`, `/predict/pairwise_plagiarism`, `/predict`, `/predict/ai_authorship`).
-* `ui/`: Runs the Streamlit dashboard with separate `Pairwise Plagiarism` and `AI Authorship` tabs plus `3` Java demo pairs.
-* `models/`: Split cleanly by task into `models/pairwise_plagiarism/` (`manifest.json`, `lgbm_metadata.json`, `cnn_metadata.json`, `plagiarism_lgbm.joblib`, `cnn_weights.npz`, `tfidf_baseline.joblib`) and `models/ai_authorship/` (`manifest.json` ready for single file AI authorship models).
+* `src/models/`: Implements similarity baselines (`baseline.py`), LightGBM classifier (`classifier.py`), NumPy CNN forward pass (`cnn_numpy.py`), the task isolated `pairwise_plagiarism` registry (`registry.py`), and the `ai_plagiarism` scorer contract (`ai_plagiarism.py`).
+* `src/inference.py`: Loads isolated `pairwise_plagiarism` and `ai_plagiarism` task bundles and runs inference in memory.
+* `src/api/`: Exposes FastAPI endpoints (`/health`, `/predict/pairwise_plagiarism`, `/predict`, `/predict/ai_plagiarism`).
+* `ui/`: Runs the Streamlit dashboard with a sidebar `Detection Mode` selector switching between `Pairwise Plagiarism` and `AI Plagiarism` views plus `3` Java demo pairs.
+* `models/`: Split cleanly by task into `models/pairwise_plagiarism/` (`manifest.json`, `lgbm_metadata.json`, `cnn_metadata.json`, `plagiarism_lgbm.joblib`, `cnn_weights.npz`, `tfidf_baseline.joblib`) and `models/ai_plagiarism/` (`manifest.json` ready for single file AI plagiarism models).
 * `model_training/`: Trains and evaluates the CNN with PyTorch and exports NumPy weights into `models/`. See its [README](model_training/README.md).
 * `scripts/`: Runs dataset preparation (`build_datasets.py`), LightGBM + TF IDF training (`train.py`, `fit_tfidf.py`), cross domain evaluation (`evaluate.py`), and chart generation (`generate_plots.py`).
 * `dataset/`: Holds `raw/` (ConPlag and IR Plag pairs) and `preprocessed/` (AST sequences). Derived `processed/` matrices and `results/` JSON files are gitignored.
@@ -86,13 +86,13 @@ curl -X POST http://localhost:8000/predict/pairwise_plagiarism \
   -H "Content-Type: application/json" \
   -d '{"code_a": "<java source A>", "code_b": "<java source B>", "language": "java", "operating_mode": "balanced", "model": "lgbm"}'
 
-# Single file AI authorship (1 file; returns HTTP 503 until an ai_authorship model is registered)
-curl -X POST http://localhost:8000/predict/ai_authorship \
+# Single file AI plagiarism (1 file; returns HTTP 503 until an ai_plagiarism model is registered)
+curl -X POST http://localhost:8000/predict/ai_plagiarism \
   -H "Content-Type: application/json" \
   -d '{"code": "<java source>", "language": "java", "operating_mode": "balanced"}'
 ```
 
-`GET /health` returns per task readiness under `tasks` (`pairwise_plagiarism` and `ai_authorship`) alongside top level `default_model` and `available_models` descriptors. `POST /predict/pairwise_plagiarism` accepts optional `model` (`lgbm` or `cnn`, defaulting to `default_model`) and `operating_mode` (`balanced` or `low_fpr`). `POST /predict/ai_authorship` scores single file submissions via registered `AuthorshipScorer` adapters under `models/ai_authorship/`.
+`GET /health` returns per task readiness under `tasks` (`pairwise_plagiarism` and `ai_plagiarism`) alongside top level `default_model` and `available_models` descriptors. `POST /predict/pairwise_plagiarism` accepts optional `model` (`lgbm` or `cnn`, defaulting to `default_model`) and `operating_mode` (`balanced` or `low_fpr`). `POST /predict/ai_plagiarism` scores single file submissions via registered `AiPlagiarismScorer` adapters under `models/ai_plagiarism/`.
 
 ## Training and evaluation
 

@@ -17,16 +17,16 @@ flowchart TD
         PM3 --> PR
     end
 
-    subgraph AiAuthorship["Task: ai_authorship (1 File)"]
+    subgraph AiPlagiarism["Task: ai_plagiarism (1 File)"]
         D1 --> AI1["Single File 12x12 Markov Matrix"]
         B1 --> AI2["Normalized Single File Source"]
-        AI1 --> AIR["models/ai_authorship/manifest.json"]
+        AI1 --> AIR["models/ai_plagiarism/manifest.json"]
         AI2 --> AIR
     end
 
     subgraph ServiceLayer["Presentation"]
         PR --> H1["FastAPI: POST /predict/pairwise_plagiarism (+ /predict)"]
-        AIR --> H2["FastAPI: POST /predict/ai_authorship"]
-        H1 --> I1["Streamlit UI: Pairwise Plagiarism Tab"]
-        H2 --> I2["Streamlit UI: AI Authorship Tab"]
+        AIR --> H2["FastAPI: POST /predict/ai_plagiarism"]
+        H1 --> I1["Streamlit UI: Pairwise Plagiarism Mode"]
+        H2 --> I2["Streamlit UI: AI Plagiarism Mode"]
     end
