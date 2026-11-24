@@ -12,7 +12,7 @@ class AdaptiveAvgPool2dMPS(nn.AdaptiveAvgPool2d):
             return super().forward(x.cpu()).to(x.device)
         return super().forward(x)
 
-class PlagiarismCNN(nn.Module):
+class AiCodeCNN(nn.Module):
     """CNN pequeña (2 convoluciones + 2 capas lineales) que devuelve un logit por muestra."""
 
     def __init__(self, in_channels: int = 1, n_states: int = 12, conv_channels: tuple[int, int] = (32, 64),
@@ -48,6 +48,6 @@ class PlagiarismCNN(nn.Module):
         return self.classifier(self.features(x)).squeeze(-1)
 
     @classmethod
-    def from_config(cls, config: dict) -> "PlagiarismCNN":
+    def from_config(cls, config: dict) -> "AiCodeCNN":
         """Crea un modelo nuevo a partir de un diccionario de configuración."""
         return cls(**config)

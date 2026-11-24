@@ -43,11 +43,14 @@ pnpm-debug.log*
 # Generated data
 *.npz
 !dataset/preprocessed/*.npz
-!models/cnn_weights.npz
+!models/ai_detector_weights.npz
 !dataset/processed/*.npz
 *.npy
 *.parquet
 !dataset/preprocessed/*.parquet
+
+# Large raw datasets (downloaded locally, never committed: GitHub rejects files over 100 MB)
+dataset/raw/human_vs_ai_code/*.jsonl
 
 # Docker & Logs
 *.log

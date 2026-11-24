@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import numpy as np
 import pytest
 
-from src.features.extraction import build_diagnostic_tensors, run_pipeline
 from src.preprocessing.normalizer import NUM_STATES, normalize_source
 from src.preprocessing.parser import ParseResult, parse_to_state_sequence
 
@@ -195,43 +193,3 @@ def test_partial_syntax_error_recovery():
     assert result.states.dtype == np.int32
     assert int(result.states.min()) >= 0
     assert int(result.states.max()) < NUM_STATES
-
-
-def test_build_diagnostic_tensors_and_single_split_pipeline(tmp_path: Path):
-    seq_a0 = parse_to_state_sequence(JAVA_SAMPLE, language="java").states
-    seq_b0 = parse_to_state_sequence(JAVA_SAMPLE, language="java").states
-    seq_a1 = parse_to_state_sequence("class A { int f(int x) { return x + 1; } }", language="java").states
-    seq_b1 = parse_to_state_sequence("class B { void g() { while (true) { break; } } }", language="java").states
-
-    seqs_a = [seq_a0, seq_a1]
-    seqs_b = [seq_b0, seq_b1]
-    off_a = np.array([0, seq_a0.size, seq_a0.size + seq_a1.size], dtype=np.int64)
-    off_b = np.array([0, seq_b0.size, seq_b0.size + seq_b1.size], dtype=np.int64)
-
-    input_npz = tmp_path / "diagnostic_sequences.npz"
-    np.savez_compressed(
-        input_npz,
-        num_states=np.asarray(NUM_STATES, dtype=np.int32),
-        diagnostic_tokens_a=np.concatenate(seqs_a).astype(np.int32),
-        diagnostic_offsets_a=off_a,
-        diagnostic_tokens_b=np.concatenate(seqs_b).astype(np.int32),
-        diagnostic_offsets_b=off_b,
-        diagnostic_y=np.asarray([1, 0], dtype=np.uint8),
-    )
-
-    diag_out = tmp_path / "diagnostic_tensors.npz"
-    X_diag, y_diag = build_diagnostic_tensors(input_path=input_npz, output_path=diag_out)
-    assert X_diag.shape == (2, 3, NUM_STATES, NUM_STATES)
-    assert X_diag.dtype == np.float32
-    assert y_diag.tolist() == [1, 0]
-    assert np.allclose(X_diag[0, 2], 0.0)
-    assert np.isfinite(X_diag).all()
-
-    pipe_out = tmp_path / "pipeline_single_split.npz"
-    summary = run_pipeline(input_path=input_npz, output_path=pipe_out, splits=("diagnostic",))
-    assert summary == {"diagnostic": (2, 3, NUM_STATES, NUM_STATES)}
-
-    with np.load(pipe_out, allow_pickle=False) as out:
-        assert "X_diagnostic" in out
-        assert "y_diagnostic" in out
-        assert np.allclose(out["X_diagnostic"], X_diag)

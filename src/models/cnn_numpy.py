@@ -1,14 +1,13 @@
-"""Numpy-only forward pass of the trained plagiarism CNN (no torch needed at inference time).
+"""Numpy-only forward pass of the trained AI-code detector (no torch needed at inference time).
 
-The network is trained with PyTorch in `model_training/`; `model_training/export_numpy.py` copies its weights to
-`models/cnn_weights.npz`. Architecture (eval mode, so dropout is off):
+The network is trained with PyTorch in `model_training/`; `model_training/export_numpy.py` copies its
+weights to `models/ai_detector_weights.npz`. Architecture (eval mode, so dropout is off):
 
-    (3, K, K) -> Conv3x3(pad 1)+ReLU -> MaxPool2 -> Conv3x3(pad 1)+ReLU -> AdaptiveAvgPool(4x4)
-              -> flatten -> Linear+ReLU -> Linear -> sigmoid = P(plagiarism)
+    (1, K, K) -> Conv3x3(pad 1)+ReLU -> MaxPool2 -> Conv3x3(pad 1)+ReLU -> AdaptiveAvgPool(4x4)
+              -> flatten -> Linear+ReLU -> Linear -> sigmoid = P(code was written by an AI)
 
-Input channels are [P_A, P_B, P_A - P_B] with *unsmoothed* transition matrices, exactly as in
-training (see `model_training/data/build_matrices.py`). The network itself is not symmetric in (A, B), so
-`predict_pairs` averages the probability of (A, B) and (B, A).
+The single input channel is the *unsmoothed* Markov transition matrix of one function, exactly as in
+training (see `model_training/data/build_matrices.py`).
 """
 
 from __future__ import annotations
@@ -48,7 +47,7 @@ def _adaptive_avg_pool(x: np.ndarray, size: int) -> np.ndarray:
 
 
 class NumpyCnnClassifier:
-    """Pairwise plagiarism CNN evaluated with numpy (the only classifier the app uses)."""
+    """AI-code detector CNN evaluated with numpy (the only classifier the app uses)."""
 
     def __init__(self, weights: dict[str, np.ndarray], n_states: int, pool_size: int = 4) -> None:
         """Store float32 weights and the geometry needed for the forward pass."""
@@ -59,8 +58,8 @@ class NumpyCnnClassifier:
         self.n_states = int(n_states)
         self.pool_size = int(pool_size)
         self.in_channels = int(self.weights["conv1_w"].shape[1])
-        if self.in_channels != 3:
-            raise ValueError(f"Expected a 3-channel CNN, got {self.in_channels} channels")
+        if self.in_channels != 1:
+            raise ValueError(f"Expected a 1-channel CNN (one matrix per function), got {self.in_channels} channels")
 
     @classmethod
     def load(cls, path: str | Path) -> NumpyCnnClassifier:
@@ -70,7 +69,7 @@ class NumpyCnnClassifier:
             return cls(weights, n_states=int(data["n_states"]), pool_size=int(data["pool_size"]))
 
     def predict_logits(self, x: np.ndarray) -> np.ndarray:
-        """Run the network on (N, 3, K, K) inputs and return one logit per sample, shape (N,)."""
+        """Run the network on (N, 1, K, K) inputs and return one logit per sample, shape (N,)."""
         x = np.asarray(x, dtype=np.float32)
         if x.ndim != 4 or x.shape[1:] != (self.in_channels, self.n_states, self.n_states):
             raise ValueError(
@@ -85,19 +84,12 @@ class NumpyCnnClassifier:
         x = np.maximum(x @ w["fc1_w"].T + w["fc1_b"], 0.0)
         return (x @ w["fc2_w"].T + w["fc2_b"]).reshape(-1)
 
-    def predict_proba_tensor(self, x: np.ndarray) -> np.ndarray:
-        """P(plagiarism) for already-built (N, 3, K, K) inputs, in the given (A, B) order."""
+    def predict_proba(self, matrices: np.ndarray) -> np.ndarray:
+        """P(AI-written) for a batch of unsmoothed transition matrices of shape (N, K, K), returned as (N,)."""
+        x = np.asarray(matrices, dtype=np.float32)[:, None]
         logits = self.predict_logits(x).astype(np.float64)
         return 1.0 / (1.0 + np.exp(-logits))
 
-    def predict_pairs(self, p_a: np.ndarray, p_b: np.ndarray) -> np.ndarray:
-        """Symmetric P(plagiarism) for batches of unsmoothed matrices p_a, p_b of shape (N, K, K)."""
-        p_a = np.asarray(p_a, dtype=np.float32)
-        p_b = np.asarray(p_b, dtype=np.float32)
-        ab = np.stack([p_a, p_b, p_a - p_b], axis=1)
-        ba = np.stack([p_b, p_a, p_b - p_a], axis=1)
-        return 0.5 * (self.predict_proba_tensor(ab) + self.predict_proba_tensor(ba))
-
-    def predict_pair(self, p_a: np.ndarray, p_b: np.ndarray) -> float:
-        """Symmetric P(plagiarism) for one pair of (K, K) unsmoothed transition matrices."""
-        return float(self.predict_pairs(p_a[np.newaxis], p_b[np.newaxis])[0])
+    def predict_one(self, matrix: np.ndarray) -> float:
+        """P(AI-written) for one unsmoothed (K, K) transition matrix."""
+        return float(self.predict_proba(np.asarray(matrix)[np.newaxis])[0])

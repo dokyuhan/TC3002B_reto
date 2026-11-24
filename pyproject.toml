@@ -1,19 +1,14 @@
 [project]
 name = "tc3002b-reto"
 version = "0.1.0"
-description = "Source code plagiarism and AI code detection system"
+description = "AI-generated Java code detector (single function, AST Markov matrix + CNN)"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.165.0",
     "httpx>=0.28.1",
-    "joblib>=1.4.0",
     "matplotlib>=3.9.0",
     "numpy>=2.5.5",
-    "polars>=2.1.0",
-    "pygments>=2.21.0",
-    "scikit-learn>=1.9.1",
-    "scipy>=1.18.1",
     "streamlit>=1.67.0",
     "tree-sitter>=0.26.1",
     "tree-sitter-cpp>=0.23.4",
@@ -25,6 +20,7 @@ dependencies = [
 [dependency-groups]
 # CNN training/evaluation in model_training/ (not needed by the app or the Docker image): uv sync --group train
 train = [
+    "scikit-learn>=1.9.1",
     "torch>=2.15.0",
 ]
 dev = [

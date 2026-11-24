@@ -1,4 +1,4 @@
-"""Markov transition matrix and pairwise tensor computation."""
+"""Markov transition matrix of one AST state sequence."""
 
 from __future__ import annotations
 
@@ -48,26 +48,3 @@ def sequence_to_transition_matrix(
     # Leave rows with zero outgoing transitions as 0.0 when smoothing_alpha == 0.0.
     matrix = np.divide(counts, row_sums, out=np.zeros_like(counts), where=row_sums > 0.0)
     return matrix.astype(np.float32)
-
-
-def pair_to_tensor(
-    seq_a: Sequence[int] | np.ndarray,
-    seq_b: Sequence[int] | np.ndarray,
-    num_states: int = NUM_STATES,
-    pad_token: int = PAD_TOKEN,
-    smoothing_alpha: float = 0.0,
-) -> np.ndarray:
-    """Build a (3, K, K) tensor with channels [P_A, P_B, |P_A - P_B|]."""
-    p_a = sequence_to_transition_matrix(
-        seq_a,
-        num_states=num_states,
-        pad_token=pad_token,
-        smoothing_alpha=smoothing_alpha,
-    )
-    p_b = sequence_to_transition_matrix(
-        seq_b,
-        num_states=num_states,
-        pad_token=pad_token,
-        smoothing_alpha=smoothing_alpha,
-    )
-    return np.stack([p_a, p_b, np.abs(p_a - p_b)], axis=0).astype(np.float32)

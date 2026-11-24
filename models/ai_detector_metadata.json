@@ -1,0 +1,110 @@
+{
+  "model_version": "1.0.0-ai-detector",
+  "task": "human_vs_ai",
+  "unit": "single function",
+  "language": "java",
+  "num_states": 12,
+  "input_channels": 1,
+  "threshold": 0.49999999999999994,
+  "threshold_low_fpr": 0.68,
+  "training": {
+    "best_epoch": 62,
+    "pos_weight": 0.4073675328076352,
+    "excluded_sources": []
+  },
+  "dataset": "OSS-forge/HumanVsAICode (Java), CC-BY-SA-4.0",
+  "metrics": {
+    "balanced_val": {
+      "accuracy": 0.711658804274574,
+      "balanced_accuracy": 0.7399694733992148,
+      "precision": 0.8956756756756756,
+      "recall": 0.6729389467984297,
+      "f1": 0.7684934683466028,
+      "false_positive_rate": 0.193,
+      "roc_auc": 0.8267070529308245,
+      "pr_auc": 0.924122154004555,
+      "n_samples": 10387,
+      "threshold": 0.49999999999999994
+    },
+    "balanced_test": {
+      "accuracy": 0.7031189461449051,
+      "balanced_accuracy": 0.7319144365556163,
+      "precision": 0.8903758020164986,
+      "recall": 0.6631622064445658,
+      "f1": 0.7601533766335394,
+      "false_positive_rate": 0.19933333333333333,
+      "roc_auc": 0.8225380711815038,
+      "pr_auc": 0.9213907113491276,
+      "n_samples": 10324,
+      "threshold": 0.49999999999999994
+    },
+    "balanced_test_per_source": {
+      "chatgpt": {
+        "n": 2903,
+        "label": "IA",
+        "correct": 0.6341715466758525
+      },
+      "deepseek": {
+        "n": 2380,
+        "label": "IA",
+        "correct": 0.8285714285714286
+      },
+      "human": {
+        "n": 3000,
+        "label": "humano",
+        "correct": 0.8006666666666666
+      },
+      "qwen": {
+        "n": 2041,
+        "label": "IA",
+        "correct": 0.5115139637432631
+      }
+    },
+    "low_fpr_val": {
+      "accuracy": 0.5937229228843747,
+      "balanced_accuracy": 0.7000109426469925,
+      "precision": 0.9580561180214059,
+      "recall": 0.44835521862731825,
+      "f1": 0.6108447067502767,
+      "false_positive_rate": 0.04833333333333333,
+      "roc_auc": 0.8267070529308245,
+      "pr_auc": 0.924122154004555,
+      "n_samples": 10387,
+      "threshold": 0.68
+    },
+    "low_fpr_test": {
+      "accuracy": 0.5915342890352576,
+      "balanced_accuracy": 0.6972527762606955,
+      "precision": 0.9557054854796128,
+      "recall": 0.4448388858547242,
+      "f1": 0.60709959936644,
+      "false_positive_rate": 0.050333333333333334,
+      "roc_auc": 0.8225380711815038,
+      "pr_auc": 0.9213907113491276,
+      "n_samples": 10324,
+      "threshold": 0.68
+    },
+    "low_fpr_test_per_source": {
+      "chatgpt": {
+        "n": 2903,
+        "label": "IA",
+        "correct": 0.40923182914226663
+      },
+      "deepseek": {
+        "n": 2380,
+        "label": "IA",
+        "correct": 0.6642857142857143
+      },
+      "human": {
+        "n": 3000,
+        "label": "humano",
+        "correct": 0.9496666666666667
+      },
+      "qwen": {
+        "n": 2041,
+        "label": "IA",
+        "correct": 0.23958843704066635
+      }
+    }
+  }
+}

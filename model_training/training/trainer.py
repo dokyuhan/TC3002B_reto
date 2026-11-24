@@ -19,6 +19,7 @@ class TrainConfig:
     min_delta: float
     weight_decay: float
     seed: int
+    pos_weight: float | None = None   # peso de la clase IA en la pérdida; None = sin pesos
 
 class EarlyStopping:
     """Detiene el entrenamiento cuando val_loss no mejora en `patience` épocas seguidas."""
@@ -73,7 +74,8 @@ def run_inference(model: nn.Module, loader: DataLoader, device: torch.device, cr
 def fit(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader, cfg: TrainConfig, device: torch.device, checkpoint_path: str | Path | None = None) -> tuple[list[dict], int]:
     """Entrena con early stopping, restaura los mejores pesos y devuelve (historial por época, mejor época)."""
     model.to(device)
-    criterion = nn.BCEWithLogitsLoss()
+    pos_weight = None if cfg.pos_weight is None else torch.tensor(float(cfg.pos_weight), device=device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     stopper = EarlyStopping(cfg.patience, cfg.min_delta)
     history, best_state, best_epoch = [], None, 0
@@ -89,7 +91,8 @@ def fit(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader, cfg:
             "train_loss": float(tr_loss), "val_loss": float(va_loss),
             "train_acc": tr["accuracy"], "val_acc": va["accuracy"],
             "train_f1": tr["f1"], "val_f1": va["f1"],
-            "val_pr_auc": va["pr_auc"],
+            "train_bal_acc": tr["balanced_accuracy"], "val_bal_acc": va["balanced_accuracy"],
+            "val_auc": va["roc_auc"], "val_pr_auc": va["pr_auc"],
         })
         improved = stopper.step(va_loss)
         if improved:
@@ -100,7 +103,7 @@ def fit(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader, cfg:
                                 extra={"epoch": epoch, "val_loss": float(va_loss)})
         h = history[-1]
         print(f"Época {epoch:3d} | train_loss {h['train_loss']:.4f} val_loss {h['val_loss']:.4f} | "
-              f"train_acc {h['train_acc']:.3f} val_acc {h['val_acc']:.3f} val_f1 {h['val_f1']:.3f}"
+              f"train_bal_acc {h['train_bal_acc']:.3f} val_bal_acc {h['val_bal_acc']:.3f} val_auc {h['val_auc']:.3f}"
               f"{'  *' if improved else ''}")
         if stopper.should_stop:
             print(f"Early stopping: sin mejora en {cfg.patience} épocas (mejor época: {best_epoch}).")

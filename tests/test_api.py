@@ -1,4 +1,4 @@
-"""Unit and integration tests for the FastAPI inference service."""
+"""Unit and integration tests for the AI-code detector inference service."""
 
 from __future__ import annotations
 
@@ -6,322 +6,280 @@ import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-import joblib
 import numpy as np
 import pytest
 
 from src.api.main import app
-from src.models.baseline import TfidfCosineBaseline
-from src.preprocessing.normalizer import DEFAULT_AST_STATES, NUM_STATES
+from src.vocabulary import DEFAULT_AST_STATES, NUM_STATES
 
-JAVA_CODE_A = """
-public class SumLoop {
-    public static int compute(int n) {
-        int total = 0;
-        for (int i = 0; i < n; i++) {
-            if (i % 2 == 0) {
-                total += i;
-            }
+REPO_MODELS = Path(__file__).resolve().parents[1] / "models"
+
+JAVA_METHOD = """
+public static int sumEven(int n) {
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        if (i % 2 == 0) {
+            total += i;
         }
-        return total;
     }
+    return total;
 }
 """
 
-JAVA_CODE_B = """
-public class Accumulator {
-    public static int run(int limit) {
-        int acc = 0;
-        int idx = 0;
-        while (idx < limit) {
-            acc = acc + idx;
-            idx++;
-        }
-        return acc;
+JAVA_OTHER_METHOD = """
+protected String join(List<String> parts) {
+    StringBuilder sb = new StringBuilder();
+    for (String p : parts) {
+        sb.append(p);
+        sb.append("/");
+    }
+    return sb.toString();
+}
+"""
+
+JAVA_FULL_CLASS = """
+public class Summer {
+    public static int sumEven(int n) {
+        int total = 0;
+        for (int i = 0; i < n; i++) { total += i; }
+        return total;
     }
 }
 """
 
 JAVA_PARTIAL_SYNTAX_ERROR = """
-public class BrokenSyntax {
-    public static int compute(int n) {
-        int total = 0
-        for (int i = 0; i < n; i++) {
-            total += i;
-        }
-        return total;
+public static int broken(int n) {
+    int total = 0
+    for (int i = 0; i < n; i++) {
+        total += i;
+    }
+    return total;
 """
 
 EXPECTED_PREDICT_KEYS = {
-    "plagiarism_probability",
+    "ai_probability",
     "predicted_label",
     "threshold_used",
-    "markov_similarity_pct",
-    "tfidf_cosine_score",
-    "markov_jsd",
-    "markov_frobenius",
-    "perplexity_a",
-    "perplexity_b",
-    "ast_tokens_a",
-    "ast_tokens_b",
-    "parse_warnings_a",
-    "parse_warnings_b",
+    "operating_mode",
+    "ast_tokens",
+    "parse_warnings",
+    "input_note",
     "state_names",
-    "transition_delta",
+    "state_share",
+    "transition_matrix",
 }
+
+
+def _random_weights(seed: int = 42) -> dict[str, np.ndarray]:
+    """Random weights with the shapes of the trained network."""
+    rng = np.random.default_rng(seed)
+    shapes = {
+        "conv1_w": (16, 1, 3, 3), "conv1_b": (16,),
+        "conv2_w": (32, 16, 3, 3), "conv2_b": (32,),
+        "fc1_w": (64, 32 * 4 * 4), "fc1_b": (64,),
+        "fc2_w": (1, 64), "fc2_b": (1,),
+    }
+    return {k: rng.normal(0.0, 0.1, size=s).astype(np.float32) for k, s in shapes.items()}
 
 
 @pytest.fixture()
 def synthetic_model_dir(tmp_path: Path) -> Path:
-    """Create random-weight CNN, tiny TF-IDF baseline, and metadata in tmp_path."""
-    rng = np.random.default_rng(42)
-    shapes = {
-        "conv1_w": (32, 3, 3, 3), "conv1_b": (32,),
-        "conv2_w": (64, 32, 3, 3), "conv2_b": (64,),
-        "fc1_w": (64, 64 * 4 * 4), "fc1_b": (64,),
-        "fc2_w": (1, 64), "fc2_b": (1,),
-    }
-    weights = {k: rng.normal(0.0, 0.1, size=s).astype(np.float32) for k, s in shapes.items()}
-
-    tfidf_baseline = TfidfCosineBaseline(max_features=256)
-    tfidf_baseline.fit([JAVA_CODE_A, JAVA_CODE_B, "class Helper { int x = 1; }"])
-
+    """Create a random-weight CNN and its metadata in tmp_path."""
+    np.savez(
+        tmp_path / "ai_detector_weights.npz",
+        **_random_weights(),
+        n_states=np.int64(NUM_STATES),
+        pool_size=np.int64(4),
+    )
     metadata = {
-        "model_version": "0.1.0-test",
+        "model_version": "0.0.0-test",
+        "language": "java",
+        "num_states": NUM_STATES,
         "threshold": 0.35,
         "threshold_low_fpr": 0.65,
-        "smoothing_alpha": 0.01,
-        "num_states": NUM_STATES,
-        "strip_boilerplate": True,
-        "supported_languages": ["java"],
     }
-
-    np.savez(tmp_path / "cnn_weights.npz", **weights, n_states=np.int64(NUM_STATES), pool_size=np.int64(4))
-    joblib.dump(tfidf_baseline, tmp_path / "tfidf_baseline.joblib")
-    (tmp_path / "model_metadata.json").write_text(
-        json.dumps(metadata),
-        encoding="utf-8",
-    )
+    (tmp_path / "ai_detector_metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     return tmp_path
 
 
-def test_health_with_loaded_models(
-    synthetic_model_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_health_with_loaded_model(synthetic_model_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """GET /health reports healthy status and calibrated metadata when artifacts load."""
     monkeypatch.setenv("MODEL_DIR", str(synthetic_model_dir))
     with TestClient(app) as client:
         response = client.get("/health")
 
     assert response.status_code == 200
-    body = response.json()
-    assert body == {
+    assert response.json() == {
         "status": "ok",
         "model_loaded": True,
         "supported_languages": ["java"],
-        "model_version": "0.1.0-test",
+        "model_version": "0.0.0-test",
     }
 
 
-def test_predict_valid_java_pair_and_thresholds(
-    synthetic_model_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_predict_schema_matrix_and_thresholds(
+    synthetic_model_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """POST /predict returns full schema, 12x12 delta, and respects operating_mode thresholds."""
+    """POST /predict returns the full schema, a valid 12x12 matrix, and respects operating_mode thresholds."""
     monkeypatch.setenv("MODEL_DIR", str(synthetic_model_dir))
     with TestClient(app) as client:
-        resp_balanced = client.post(
-            "/predict",
-            json={
-                "code_a": JAVA_CODE_A,
-                "code_b": JAVA_CODE_B,
-                "language": "java",
-                "operating_mode": "balanced",
-            },
-        )
-        resp_low_fpr = client.post(
-            "/predict",
-            json={
-                "code_a": JAVA_CODE_A,
-                "code_b": JAVA_CODE_B,
-                "language": "java",
-                "operating_mode": "low_fpr",
-            },
-        )
+        balanced = client.post("/predict", json={"code": JAVA_METHOD, "operating_mode": "balanced"})
+        low_fpr = client.post("/predict", json={"code": JAVA_METHOD, "operating_mode": "low_fpr"})
 
-    assert resp_balanced.status_code == 200
-    assert resp_low_fpr.status_code == 200
+    assert balanced.status_code == 200 and low_fpr.status_code == 200
+    body, body_low = balanced.json(), low_fpr.json()
 
-    data_bal = resp_balanced.json()
-    data_low = resp_low_fpr.json()
+    assert set(body) == EXPECTED_PREDICT_KEYS
+    assert 0.0 <= body["ai_probability"] <= 1.0
+    assert body["threshold_used"] == pytest.approx(0.35)
+    assert body_low["threshold_used"] == pytest.approx(0.65)
+    assert body["ai_probability"] == pytest.approx(body_low["ai_probability"])
+    assert body["predicted_label"] == int(body["ai_probability"] >= 0.35)
+    assert body_low["predicted_label"] == int(body_low["ai_probability"] >= 0.65)
+    assert body["operating_mode"] == "balanced" and body_low["operating_mode"] == "low_fpr"
 
-    assert set(data_bal.keys()) == EXPECTED_PREDICT_KEYS
-    assert isinstance(data_bal["plagiarism_probability"], float)
-    assert 0.0 <= data_bal["plagiarism_probability"] <= 1.0
-    assert isinstance(data_bal["predicted_label"], int)
-    assert data_bal["predicted_label"] in (0, 1)
-    assert data_bal["threshold_used"] == pytest.approx(0.35)
-    assert data_low["threshold_used"] == pytest.approx(0.65)
-    assert data_bal["predicted_label"] == int(
-        data_bal["plagiarism_probability"] >= data_bal["threshold_used"]
-    )
-    assert data_low["predicted_label"] == int(
-        data_low["plagiarism_probability"] >= data_low["threshold_used"]
-    )
-
-    assert 0.0 <= data_bal["markov_similarity_pct"] <= 100.0
-    assert 0.0 <= data_bal["tfidf_cosine_score"] <= 1.0
-    assert data_bal["markov_jsd"] >= 0.0
-    assert data_bal["markov_frobenius"] >= 0.0
-    assert data_bal["perplexity_a"] > 0.0
-    assert data_bal["perplexity_b"] > 0.0
-    assert data_bal["ast_tokens_a"] >= 2
-    assert data_bal["ast_tokens_b"] >= 2
-    assert data_bal["parse_warnings_a"] is False
-    assert data_bal["parse_warnings_b"] is False
-
-    assert data_bal["state_names"] == list(DEFAULT_AST_STATES)
-    assert len(data_bal["transition_delta"]) == NUM_STATES
-    assert all(len(row) == NUM_STATES for row in data_bal["transition_delta"])
+    assert body["ast_tokens"] >= 5
+    assert body["parse_warnings"] is False
+    assert body["input_note"] is None
+    assert body["state_names"] == list(DEFAULT_AST_STATES)
+    assert sum(body["state_share"]) == pytest.approx(1.0)
+    matrix = np.array(body["transition_matrix"])
+    assert matrix.shape == (NUM_STATES, NUM_STATES)
+    row_sums = matrix.sum(axis=1)
+    assert np.all(np.isclose(row_sums, 1.0, atol=1e-5) | np.isclose(row_sums, 0.0, atol=1e-6))
 
 
-def test_predict_permutation_symmetry(
-    synthetic_model_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_predict_is_deterministic_and_input_dependent(
+    synthetic_model_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """POST /predict is permutation symmetric across (A, B) and (B, A)."""
+    """The same code gives the same probability; different code gives a different one."""
     monkeypatch.setenv("MODEL_DIR", str(synthetic_model_dir))
     with TestClient(app) as client:
-        resp_ab = client.post(
-            "/predict",
-            json={"code_a": JAVA_CODE_A, "code_b": JAVA_CODE_B, "language": "java"},
-        )
-        resp_ba = client.post(
-            "/predict",
-            json={"code_a": JAVA_CODE_B, "code_b": JAVA_CODE_A, "language": "java"},
-        )
+        first = client.post("/predict", json={"code": JAVA_METHOD}).json()
+        again = client.post("/predict", json={"code": JAVA_METHOD}).json()
+        other = client.post("/predict", json={"code": JAVA_OTHER_METHOD}).json()
 
-    assert resp_ab.status_code == 200
-    assert resp_ba.status_code == 200
+    assert first["ai_probability"] == again["ai_probability"]
+    assert first["ai_probability"] != other["ai_probability"]
 
-    ab = resp_ab.json()
-    ba = resp_ba.json()
 
-    assert abs(ab["plagiarism_probability"] - ba["plagiarism_probability"]) < 1e-6
-    assert ab["markov_jsd"] == pytest.approx(ba["markov_jsd"], abs=1e-9)
-    assert ab["markov_frobenius"] == pytest.approx(ba["markov_frobenius"], abs=1e-9)
-    assert ab["markov_similarity_pct"] == ba["markov_similarity_pct"]
-    assert ab["perplexity_a"] == pytest.approx(ba["perplexity_b"], abs=1e-9)
-    assert ab["perplexity_b"] == pytest.approx(ba["perplexity_a"], abs=1e-9)
-    assert np.allclose(ab["transition_delta"], ba["transition_delta"], atol=1e-7)
+def test_predict_comments_and_formatting_are_ignored(
+    synthetic_model_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Comments and whitespace do not change the result (the model only sees the AST structure)."""
+    commented = JAVA_METHOD.replace("int total = 0;", "// accumulate\n    int total   =   0;  /* start */")
+    monkeypatch.setenv("MODEL_DIR", str(synthetic_model_dir))
+    with TestClient(app) as client:
+        plain = client.post("/predict", json={"code": JAVA_METHOD}).json()
+        noisy = client.post("/predict", json={"code": commented}).json()
+
+    assert plain["ai_probability"] == pytest.approx(noisy["ai_probability"])
+
+
+def test_predict_full_class_adds_note(synthetic_model_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A whole class is accepted but flagged, because the model was trained on single methods."""
+    monkeypatch.setenv("MODEL_DIR", str(synthetic_model_dir))
+    with TestClient(app) as client:
+        response = client.post("/predict", json={"code": JAVA_FULL_CLASS})
+
+    assert response.status_code == 200
+    assert "single methods" in response.json()["input_note"]
 
 
 def test_predict_partial_syntax_error_returns_200_with_warning(
-    synthetic_model_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    synthetic_model_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Partial syntax error with >= 2 recovered AST states returns 200 and flags parse_warnings."""
+    """Partial syntax error with enough recovered AST states returns 200 and flags parse_warnings."""
     monkeypatch.setenv("MODEL_DIR", str(synthetic_model_dir))
     with TestClient(app) as client:
-        response = client.post(
-            "/predict",
-            json={
-                "code_a": JAVA_PARTIAL_SYNTAX_ERROR,
-                "code_b": JAVA_CODE_B,
-                "language": "java",
-            },
-        )
+        response = client.post("/predict", json={"code": JAVA_PARTIAL_SYNTAX_ERROR})
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["parse_warnings_a"] is True
-    assert body["parse_warnings_b"] is False
-    assert body["ast_tokens_a"] >= 2
+    assert response.json()["parse_warnings"] is True
 
 
-@pytest.mark.parametrize(
-    ("code_a", "code_b"),
-    [
-        ("   \n\t  ", JAVA_CODE_B),
-        (JAVA_CODE_A, ""),
-    ],
-)
+@pytest.mark.parametrize("code", ["", "   \n\t  "])
 def test_predict_blank_input_returns_422(
-    synthetic_model_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    code_a: str,
-    code_b: str,
+    synthetic_model_dir: Path, monkeypatch: pytest.MonkeyPatch, code: str
 ) -> None:
-    """Blank or whitespace-only source code inputs return HTTP 422."""
+    """Blank or whitespace-only source code returns HTTP 422."""
     monkeypatch.setenv("MODEL_DIR", str(synthetic_model_dir))
     with TestClient(app) as client:
-        response = client.post(
-            "/predict",
-            json={"code_a": code_a, "code_b": code_b, "language": "java"},
-        )
+        response = client.post("/predict", json={"code": code})
 
     assert response.status_code == 422
 
 
 def test_predict_too_few_ast_states_returns_422(
-    synthetic_model_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    synthetic_model_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Inputs yielding fewer than 2 AST states return HTTP 422."""
+    """Inputs yielding fewer AST states than the model needs return HTTP 422."""
     monkeypatch.setenv("MODEL_DIR", str(synthetic_model_dir))
     with TestClient(app) as client:
-        response = client.post(
-            "/predict",
-            json={
-                "code_a": "// comment only, no executable AST nodes",
-                "code_b": JAVA_CODE_B,
-                "language": "java",
-            },
-        )
+        response = client.post("/predict", json={"code": "// only a comment"})
 
     assert response.status_code == 422
     assert "Insufficient valid AST states" in response.json()["detail"]
 
 
-def test_predict_uncalibrated_language_returns_422(
-    synthetic_model_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ("int x = 1;", "No method found"),
+        ("void f() { }", "no statements"),
+        ("void f() {\n  // TODO\n}", "no statements"),
+    ],
+)
+def test_predict_rejects_inputs_that_are_not_real_methods(
+    synthetic_model_dir: Path, monkeypatch: pytest.MonkeyPatch, code: str, message: str
 ) -> None:
-    """Uncalibrated language ('python' in Phase 1) returns HTTP 422 with clear detail."""
+    """Fields and empty-body stubs were excluded from training, so the API refuses them instead of guessing."""
     monkeypatch.setenv("MODEL_DIR", str(synthetic_model_dir))
     with TestClient(app) as client:
-        response = client.post(
-            "/predict",
-            json={
-                "code_a": "def f(x):\n    return x + 1\n",
-                "code_b": "def g(y):\n    return y + 2\n",
-                "language": "python",
-            },
-        )
+        response = client.post("/predict", json={"code": code})
 
     assert response.status_code == 422
-    assert "Phase 1" in response.json()["detail"]
+    assert message in response.json()["detail"]
+
+
+def test_predict_uncalibrated_language_returns_422(
+    synthetic_model_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A language other than Java is rejected by request validation."""
+    monkeypatch.setenv("MODEL_DIR", str(synthetic_model_dir))
+    with TestClient(app) as client:
+        response = client.post("/predict", json={"code": "def f(x):\n    return x + 1\n", "language": "python"})
+
+    assert response.status_code == 422
 
 
 def test_missing_model_artifacts_health_and_predict_503(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Missing model artifacts keep /health alive with model_loaded=False and return 503 on /predict."""
     monkeypatch.setenv("MODEL_DIR", str(tmp_path))
     with TestClient(app) as client:
         health_resp = client.get("/health")
-        predict_resp = client.post(
-            "/predict",
-            json={"code_a": JAVA_CODE_A, "code_b": JAVA_CODE_B, "language": "java"},
-        )
+        predict_resp = client.post("/predict", json={"code": JAVA_METHOD})
 
     assert health_resp.status_code == 200
-    health_body = health_resp.json()
-    assert health_body["status"] == "ok"
-    assert health_body["model_loaded"] is False
-    assert health_body["supported_languages"] == []
-
+    assert health_resp.json()["model_loaded"] is False
+    assert health_resp.json()["supported_languages"] == []
     assert predict_resp.status_code == 503
     assert "Model artifacts not loaded" in predict_resp.json()["detail"]
+
+
+@pytest.mark.skipif(
+    not (REPO_MODELS / "ai_detector_weights.npz").is_file(), reason="trained detector not exported"
+)
+def test_real_exported_model_serves_predictions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The committed models/ directory loads the real detector and answers /predict."""
+    monkeypatch.setenv("MODEL_DIR", str(REPO_MODELS))
+    with TestClient(app) as client:
+        health = client.get("/health").json()
+        body = client.post("/predict", json={"code": JAVA_METHOD}).json()
+
+    assert health["model_loaded"] is True
+    assert health["model_version"].endswith("ai-detector")
+    assert 0.0 <= body["ai_probability"] <= 1.0
+    assert 0.0 < body["threshold_used"] < 1.0

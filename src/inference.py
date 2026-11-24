@@ -1,4 +1,4 @@
-"""Cohesive runtime inference facade decoupling HTTP transport from ML internals."""
+"""Runtime inference facade: one Java function in, probability that an AI wrote it out."""
 
 from __future__ import annotations
 
@@ -9,21 +9,19 @@ import os
 from pathlib import Path
 from typing import Literal
 
-import joblib
+import numpy as np
 
-from src.features.markov import pair_to_tensor, sequence_to_transition_matrix
-from src.models.baseline import (
-    TfidfCosineBaseline,
-    frobenius_distance,
-    jensen_shannon_divergence,
-    transition_perplexity,
-)
+from src.features.markov import sequence_to_transition_matrix
 from src.models.cnn_numpy import NumpyCnnClassifier
-from src.preprocessing.normalizer import normalize_source
+from src.preprocessing.filters import declares_top_level_type, has_empty_body
 from src.preprocessing.parser import parse_to_state_sequence
-from src.vocabulary import DEFAULT_AST_STATES, NUM_STATES
+from src.vocabulary import DEFAULT_AST_STATES, NUM_STATES, STATE_TO_ID
 
 logger = logging.getLogger(__name__)
+
+WEIGHTS_FILE = "ai_detector_weights.npz"
+METADATA_FILE = "ai_detector_metadata.json"
+MIN_AST_STATES = 5  # same minimum the training data used
 
 
 class ModelNotLoadedError(RuntimeError):
@@ -36,39 +34,31 @@ class InvalidInputError(ValueError):
 
 @dataclass(frozen=True)
 class ModelBundle:
-    """In-memory bundle of loaded model artifacts and calibrated metadata."""
+    """In-memory bundle of the loaded model and its calibrated metadata."""
 
     model_loaded: bool = False
     classifier: NumpyCnnClassifier | None = None
-    tfidf_baseline: TfidfCosineBaseline | None = None
     model_version: str = "unknown"
     threshold: float = 0.5
     threshold_low_fpr: float = 0.5
-    smoothing_alpha: float = 0.01
     num_states: int = NUM_STATES
-    strip_boilerplate: bool = True
     supported_languages: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
-class PairAnalysis:
-    """Structured plagiarism analysis result for a source code pair."""
+class CodeAnalysis:
+    """Structured result of analyzing one function."""
 
-    plagiarism_probability: float
+    ai_probability: float
     predicted_label: int
     threshold_used: float
-    markov_similarity_pct: float
-    tfidf_cosine_score: float
-    markov_jsd: float
-    markov_frobenius: float
-    perplexity_a: float
-    perplexity_b: float
-    ast_tokens_a: int
-    ast_tokens_b: int
-    parse_warnings_a: bool
-    parse_warnings_b: bool
+    operating_mode: str
+    ast_tokens: int
+    parse_warnings: bool
+    input_note: str | None
     state_names: list[str]
-    transition_delta: list[list[float]]
+    state_share: list[float]
+    transition_matrix: list[list[float]]
 
 
 def resolve_model_dir() -> Path:
@@ -89,12 +79,11 @@ def resolve_model_dir() -> Path:
 
 
 def load_model_bundle(model_dir: Path) -> ModelBundle:
-    """Load the CNN classifier, TF-IDF baseline, and metadata JSON without crashing startup."""
-    clf_path = model_dir / "cnn_weights.npz"
-    tfidf_path = model_dir / "tfidf_baseline.joblib"
-    meta_path = model_dir / "model_metadata.json"
+    """Load the CNN weights and metadata JSON without crashing startup."""
+    weights_path = model_dir / WEIGHTS_FILE
+    meta_path = model_dir / METADATA_FILE
 
-    missing = [p.name for p in (clf_path, tfidf_path, meta_path) if not p.is_file()]
+    missing = [p.name for p in (weights_path, meta_path) if not p.is_file()]
     if missing:
         logger.warning(
             "Model artifacts missing in %s: %s. Starting in degraded mode.",
@@ -105,119 +94,82 @@ def load_model_bundle(model_dir: Path) -> ModelBundle:
 
     try:
         metadata = json.loads(meta_path.read_text(encoding="utf-8"))
-        classifier = NumpyCnnClassifier.load(clf_path)
-        tfidf_baseline = joblib.load(tfidf_path)
+        classifier = NumpyCnnClassifier.load(weights_path)
     except Exception as exc:
         logger.warning("Failed to load model artifacts from %s: %s", model_dir, exc)
         return ModelBundle(model_loaded=False)
 
-    if not isinstance(tfidf_baseline, TfidfCosineBaseline):
-        logger.warning(
-            "Loaded artifacts from %s do not match expected model classes.",
-            model_dir,
-        )
-        return ModelBundle(model_loaded=False)
-
-    supported_raw = metadata.get("supported_languages", ["java"])
-    supported_languages = tuple(str(lang).strip().lower() for lang in supported_raw)
-
+    language = str(metadata.get("language", "java")).strip().lower()
     return ModelBundle(
         model_loaded=True,
         classifier=classifier,
-        tfidf_baseline=tfidf_baseline,
         model_version=str(metadata.get("model_version", "unknown")),
         threshold=float(metadata.get("threshold", 0.5)),
         threshold_low_fpr=float(metadata.get("threshold_low_fpr", 0.5)),
-        smoothing_alpha=float(metadata.get("smoothing_alpha", 0.01)),
         num_states=int(metadata.get("num_states", NUM_STATES)),
-        strip_boilerplate=bool(metadata.get("strip_boilerplate", True)),
-        supported_languages=supported_languages,
+        supported_languages=(language,),
     )
 
 
-def analyze_pair(
+def analyze_code(
     bundle: ModelBundle,
-    code_a: str,
-    code_b: str,
+    code: str,
     language: str = "java",
     operating_mode: Literal["balanced", "low_fpr"] = "balanced",
-) -> PairAnalysis:
-    """Evaluate pairwise structural plagiarism strictly in memory."""
-    if (
-        not bundle.model_loaded
-        or bundle.classifier is None
-        or bundle.tfidf_baseline is None
-    ):
+) -> CodeAnalysis:
+    """Estimate the probability that one function was written by an AI, strictly in memory."""
+    if not bundle.model_loaded or bundle.classifier is None:
         raise ModelNotLoadedError("Model artifacts not loaded")
 
-    if not code_a.strip() or not code_b.strip():
-        raise InvalidInputError("Both code_a and code_b must contain non-empty source code.")
+    if not code.strip():
+        raise InvalidInputError("The code must not be empty.")
 
     if language not in bundle.supported_languages:
         calibrated = ", ".join(bundle.supported_languages) or "none"
         raise InvalidInputError(
-            f"Language '{language}' is not calibrated in Phase 1. "
-            f"Calibrated languages: {calibrated}."
+            f"Language '{language}' is not calibrated. Calibrated languages: {calibrated}."
         )
 
-    res_a = parse_to_state_sequence(
-        code_a,
-        language=language,
-        strip_boilerplate=bundle.strip_boilerplate,
-    )
-    res_b = parse_to_state_sequence(
-        code_b,
-        language=language,
-        strip_boilerplate=bundle.strip_boilerplate,
-    )
+    if has_empty_body(code):
+        raise InvalidInputError("The method body has no statements. Paste a method with code inside it.")
 
-    if len(res_a.states) < 2 or len(res_b.states) < 2:
-        raise InvalidInputError("Insufficient valid AST states for Markov transition analysis")
+    note: str | None = None
+    if declares_top_level_type(code):
+        parsed_source = code
+        note = (
+            "This input declares its own class. The model was trained on single methods, "
+            "so the result is less reliable. Paste just the method for a better estimate."
+        )
+    else:
+        # The training data are bare methods wrapped in a class so tree-sitter sees a valid compilation unit.
+        parsed_source = "class W {\n" + code + "\n}"
 
-    tensor = pair_to_tensor(
-        res_a.states,
-        res_b.states,
-        num_states=bundle.num_states,
-        smoothing_alpha=bundle.smoothing_alpha,
-    )
-    p_a, p_b, delta = tensor[0], tensor[1], tensor[2]
+    result = parse_to_state_sequence(parsed_source, language=language, strip_boilerplate=False)
+    if len(result.states) < MIN_AST_STATES:
+        raise InvalidInputError(
+            f"Insufficient valid AST states (found {len(result.states)}, need at least {MIN_AST_STATES}). "
+            "Paste a complete function."
+        )
 
-    perp_a = transition_perplexity(res_a.states, p_a, smoothing_alpha=bundle.smoothing_alpha)
-    perp_b = transition_perplexity(res_b.states, p_b, smoothing_alpha=bundle.smoothing_alpha)
+    if STATE_TO_ID["FUNCTION"] not in result.states:
+        raise InvalidInputError(
+            "No method found. The model was trained on whole methods, so paste a complete method."
+        )
 
-    # The CNN was trained on unsmoothed matrices with a signed difference channel
-    # (model_training/data/build_matrices.py), so it gets its own input instead of the smoothed tensor above.
-    raw_a = sequence_to_transition_matrix(res_a.states, num_states=bundle.num_states)
-    raw_b = sequence_to_transition_matrix(res_b.states, num_states=bundle.num_states)
-    plagiarism_probability = bundle.classifier.predict_pair(raw_a, raw_b)
+    matrix = sequence_to_transition_matrix(result.states, num_states=bundle.num_states)
+    probability = bundle.classifier.predict_one(matrix)
+    threshold = bundle.threshold_low_fpr if operating_mode == "low_fpr" else bundle.threshold
+    counts = np.bincount(np.asarray(result.states), minlength=bundle.num_states)
 
-    markov_jsd = float(jensen_shannon_divergence(p_a, p_b))
-    markov_frobenius = float(frobenius_distance(p_a, p_b))
-    markov_similarity_pct = round(max(0.0, min(100.0, (1.0 - markov_jsd) * 100.0)), 2)
-
-    norm_a = normalize_source(code_a, language=language, strip_boilerplate=bundle.strip_boilerplate)
-    norm_b = normalize_source(code_b, language=language, strip_boilerplate=bundle.strip_boilerplate)
-    tfidf_cosine_score = float(bundle.tfidf_baseline.score_pair(norm_a, norm_b))
-
-    threshold_used = (
-        bundle.threshold_low_fpr if operating_mode == "low_fpr" else bundle.threshold
-    )
-    predicted_label = int(plagiarism_probability >= threshold_used)
-
-    return PairAnalysis(
-        plagiarism_probability=plagiarism_probability,
-        predicted_label=predicted_label,
-        threshold_used=float(threshold_used),
-        markov_similarity_pct=markov_similarity_pct,
-        tfidf_cosine_score=tfidf_cosine_score,
-        markov_jsd=markov_jsd,
-        markov_frobenius=markov_frobenius,
-        perplexity_a=float(perp_a),
-        perplexity_b=float(perp_b),
-        ast_tokens_a=int(res_a.token_count),
-        ast_tokens_b=int(res_b.token_count),
-        parse_warnings_a=bool(res_a.has_error),
-        parse_warnings_b=bool(res_b.has_error),
+    return CodeAnalysis(
+        ai_probability=probability,
+        predicted_label=int(probability >= threshold),
+        threshold_used=float(threshold),
+        operating_mode=operating_mode,
+        ast_tokens=int(result.token_count),
+        parse_warnings=bool(result.has_error),
+        input_note=note,
         state_names=list(DEFAULT_AST_STATES[: bundle.num_states]),
-        transition_delta=[[float(val) for val in row] for row in delta.tolist()],
+        state_share=[float(v) for v in (counts / counts.sum()).tolist()],
+        transition_matrix=[[float(v) for v in row] for row in matrix.tolist()],
     )

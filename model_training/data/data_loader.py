@@ -2,18 +2,19 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from model_training.data.dataset import PlagiarismDataset
+from model_training.data.dataset import CodeDataset
 from model_training.data.features import validate_features
 
 def _load_npz(path: Path) -> dict[str, np.ndarray]:
-    """Lee un .npz con las claves X, y y (opcional) group; falla si falta X o y."""
+    """Lee un .npz con las claves X, y y (opcionales) group y source; falla si falta X o y."""
     with np.load(path) as f:
         missing = {"X", "y"} - set(f.files)
         if missing:
             raise KeyError(f"{path} no contiene las claves {sorted(missing)} (tiene {f.files})")
         data = {"X": f["X"], "y": f["y"]}
-        if "group" in f.files:
-            data["group"] = f["group"]
+        for optional in ("group", "source"):
+            if optional in f.files:
+                data[optional] = f[optional]
     return data
 
 _LOADERS = {".npz": _load_npz}
@@ -38,6 +39,15 @@ def load_split(path: str | Path) -> dict[str, np.ndarray]:
     data["y"] = y.astype(np.int64)
     return data
 
+def exclude_sources(data: dict[str, np.ndarray], names: tuple[str, ...]) -> dict[str, np.ndarray]:
+    """Quita de la partición las muestras escritas por las fuentes `names` (p. ej. una IA que se quiere probar sin ver)."""
+    if not names:
+        return data
+    if "source" not in data:
+        raise KeyError("La partición no tiene la clave 'source'; no se pueden excluir fuentes")
+    keep = ~np.isin(data["source"], list(names))
+    return {k: v[keep] for k, v in data.items()}
+
 def get_data_info(X: np.ndarray) -> dict[str, int]:
     """Devuelve el número de canales y de estados (K) leídos de la forma de X."""
     return {"in_channels": int(X.shape[1]), "n_states": int(X.shape[2])}
@@ -47,4 +57,4 @@ def make_dataloader(data: dict[str, np.ndarray], batch_size: int = 64, shuffle: 
     generator = None
     if shuffle and seed is not None:
         generator = torch.Generator().manual_seed(seed)
-    return DataLoader(PlagiarismDataset(data["X"], data["y"]), batch_size=batch_size, shuffle=shuffle, generator=generator)
+    return DataLoader(CodeDataset(data["X"], data["y"]), batch_size=batch_size, shuffle=shuffle, generator=generator)

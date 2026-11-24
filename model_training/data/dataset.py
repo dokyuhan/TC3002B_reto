@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-class PlagiarismDataset(Dataset):
+class CodeDataset(Dataset):
     """Dataset de PyTorch con X (N, C, K, K) e y (N,) como tensores float32 (MPS no soporta float64)."""
 
     def __init__(self, X: np.ndarray, y: np.ndarray) -> None:
