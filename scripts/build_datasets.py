@@ -9,8 +9,8 @@ import numpy as np
 import polars as pl
 from sklearn.model_selection import StratifiedGroupKFold
 
-from src.preprocessing.normalizer import DEFAULT_AST_STATES, NUM_STATES
 from src.preprocessing.parser import parse_to_state_sequence
+from src.vocabulary import DEFAULT_AST_STATES, NUM_STATES
 
 DEFAULT_CONPLAG_ROOT = Path("dataset/raw/conplag")
 DEFAULT_IR_PLAG_ROOT = Path("dataset/raw/ir_plag")

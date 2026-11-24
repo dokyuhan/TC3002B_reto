@@ -10,11 +10,8 @@ import tree_sitter_cpp
 import tree_sitter_java
 import tree_sitter_python
 
-from src.preprocessing.normalizer import (
-    STATE_TO_ID,
-    SUPPORTED_LANGUAGES,
-    normalize_source,
-)
+from src.preprocessing.normalizer import normalize_source
+from src.vocabulary import STATE_TO_ID, SUPPORTED_LANGUAGES
 
 COMMENT_NODES: frozenset[str] = frozenset(
     {

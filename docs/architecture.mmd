@@ -7,19 +7,22 @@ flowchart TD
 
     subgraph FeaturePipeline["Feature Extraction"]
         D1 --> F1["Binary NPZ And Parquet Sequence Cache"]
-        F1 --> E1["1st Order Markov Transition Tensor"]
+        F1 --> E1["Smoothed Markov Tensor (alpha 0.01, abs diff)"]
+        F1 --> E3["Unsmoothed Markov Tensor (alpha 0.0, signed diff)"]
         B1 --> E2["Character N Gram TF IDF Baseline"]
     end
 
-    subgraph ModelingEngine["Modeling"]
+    subgraph ModelingEngine["Modeling Registry"]
         E1 --> G1["Symmetric Markov Distance Metrics"]
-        E1 --> G2["Pairwise CNN Classifier"]
+        E1 --> G2["Calibrated Pairwise LightGBM (Default)"]
+        E3 --> G4["NumPy Pairwise CNN (Selectable)"]
         E2 --> G3["TF IDF Cosine Baseline"]
     end
 
     subgraph ServiceLayer["Presentation"]
         G1 --> H1["FastAPI Inference Service"]
         G2 --> H1
+        G4 --> H1
         G3 --> H1
         H1 --> I1["Streamlit Interactive Dashboard"]
     end

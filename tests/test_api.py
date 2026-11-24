@@ -12,7 +12,7 @@ import pytest
 from src.api.main import app
 from src.models.baseline import TfidfCosineBaseline
 from src.models.registry import ensure_manifest_entry, write_model_metadata
-from src.preprocessing.normalizer import DEFAULT_AST_STATES, NUM_STATES
+from src.vocabulary import DEFAULT_AST_STATES, NUM_STATES
 
 JAVA_CODE_A = """
 public class SumLoop {
@@ -53,6 +53,8 @@ public class BrokenSyntax {
 """
 
 EXPECTED_PREDICT_KEYS = {
+    "model_used",
+    "model_version",
     "plagiarism_probability",
     "predicted_label",
     "threshold_used",
@@ -133,6 +135,17 @@ def test_health_with_loaded_models(
         "model_loaded": True,
         "supported_languages": ["java"],
         "model_version": "0.1.0-test",
+        "default_model": "cnn",
+        "available_models": [
+            {
+                "id": "cnn",
+                "display_name": "Pairwise CNN",
+                "model_version": "0.1.0-test",
+                "supported_languages": ["java"],
+                "threshold": 0.35,
+                "threshold_low_fpr": 0.65,
+            }
+        ],
     }
 
 
@@ -337,3 +350,54 @@ def test_missing_model_artifacts_health_and_predict_503(
 
     assert predict_resp.status_code == 503
     assert "Model artifacts not loaded" in predict_resp.json()["detail"]
+
+
+def test_predict_multi_model_selection_and_invalid_model_422(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /health lists both models; POST /predict selects lgbm or cnn and rejects unknown IDs."""
+    repo_models = Path(__file__).resolve().parents[1] / "models"
+    monkeypatch.setenv("MODEL_DIR", str(repo_models))
+    with TestClient(app) as client:
+        health = client.get("/health").json()
+        assert health["model_loaded"] is True
+        assert health["default_model"] == "lgbm"
+        assert [item["id"] for item in health["available_models"]] == ["lgbm", "cnn"]
+
+        default_resp = client.post(
+            "/predict",
+            json={"code_a": JAVA_CODE_A, "code_b": JAVA_CODE_B, "language": "java"},
+        )
+        lgbm_resp = client.post(
+            "/predict",
+            json={"code_a": JAVA_CODE_A, "code_b": JAVA_CODE_B, "language": "java", "model": "lgbm"},
+        )
+        cnn_resp = client.post(
+            "/predict",
+            json={"code_a": JAVA_CODE_A, "code_b": JAVA_CODE_B, "language": "java", "model": "cnn"},
+        )
+        invalid_resp = client.post(
+            "/predict",
+            json={
+                "code_a": JAVA_CODE_A,
+                "code_b": JAVA_CODE_B,
+                "language": "java",
+                "model": "unknown_model",
+            },
+        )
+
+    assert default_resp.status_code == 200
+    assert lgbm_resp.status_code == 200
+    assert cnn_resp.status_code == 200
+    assert invalid_resp.status_code == 422
+
+    default_body = default_resp.json()
+    lgbm_body = lgbm_resp.json()
+    cnn_body = cnn_resp.json()
+    assert default_body["model_used"] == "lgbm"
+    assert lgbm_body["model_used"] == "lgbm"
+    assert cnn_body["model_used"] == "cnn"
+    assert default_body["plagiarism_probability"] == pytest.approx(
+        lgbm_body["plagiarism_probability"], abs=1e-9
+    )
+    assert lgbm_body["transition_delta"] == cnn_body["transition_delta"]

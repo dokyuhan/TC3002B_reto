@@ -6,7 +6,7 @@ import pytest
 
 from src.features.extraction import run_pipeline
 from src.features.markov import pair_to_tensor, sequence_to_transition_matrix
-from src.preprocessing.normalizer import PAD_TOKEN
+from src.vocabulary import PAD_TOKEN
 
 
 def _write_test_archive(path: Path, storage_format: str, num_states: int = 12) -> None:

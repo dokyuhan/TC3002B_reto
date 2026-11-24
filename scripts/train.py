@@ -21,8 +21,9 @@ from src.features.markov import pair_to_tensor
 from src.models.baseline import TfidfCosineBaseline, transition_perplexity
 from src.models.classifier import PairwisePlagiarismClassifier
 from src.models.registry import ensure_manifest_entry, write_model_metadata
-from src.preprocessing.normalizer import NUM_STATES, normalize_source
+from src.preprocessing.normalizer import normalize_source
 from src.preprocessing.parser import parse_to_state_sequence
+from src.vocabulary import NUM_STATES
 
 DEFAULT_CONPLAG_V2_MANIFEST = Path("dataset/preprocessed/conplag_v2_manifest.parquet")
 DEFAULT_MODELS_DIR = Path("models")
