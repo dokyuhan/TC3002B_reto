@@ -6,7 +6,6 @@ Usage (from repository root):
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -17,8 +16,10 @@ from model_training.data.data_loader import load_split
 from model_training.network.checkpoints import load_checkpoint, normalize_state_dict
 from model_training.training.metrics import compute_metrics
 from src.models.cnn_numpy import NumpyCnnClassifier
+from src.models.registry import ensure_manifest_entry, write_model_metadata
 
 MODELS_DIR = config.ROOT / "models"
+MAX_BUNDLE_BYTES = 1_048_576  # 1 MB per model artifact set
 # Fixed 0.50 operating point documented for uncalibrated CNN probabilities.
 BALANCED_THRESHOLD = 0.5
 LOW_FPR_TARGET = 0.05
@@ -104,20 +105,34 @@ def main() -> None:
                 f"FPR={m['false_positive_rate']:.3f} F1={m['f1']:.3f} PR_AUC={m['pr_auc']:.3f}"
             )
 
-    meta_path = MODELS_DIR / "model_metadata.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
-    keep = ("smoothing_alpha", "num_states", "strip_boilerplate", "supported_languages")
-    meta = {k: v for k, v in meta.items() if k in keep}
-    meta.update(
-        {
-            "model_version": "0.2.0-cnn",
-            "classifier": "cnn",
-            "threshold": BALANCED_THRESHOLD,
-            "threshold_low_fpr": thr_low,
-            "cnn_metrics": cnn_metrics,
-        }
+    meta_filename = "cnn_metadata.json"
+    meta_path = MODELS_DIR / meta_filename
+    n_states = int(ckpt["model_config"]["n_states"])
+    meta: dict[str, object] = {
+        "kind": "cnn",
+        "display_name": "Pairwise CNN",
+        "artifact": weights_path.name,
+        "model_version": "0.2.0-cnn",
+        "threshold": BALANCED_THRESHOLD,
+        "threshold_low_fpr": thr_low,
+        "smoothing_alpha": 0.0,
+        "num_states": n_states,
+        "strip_boilerplate": True,
+        "supported_languages": ["java"],
+        "cnn_metrics": cnn_metrics,
+    }
+    write_model_metadata(meta_path, meta)
+    ensure_manifest_entry(
+        MODELS_DIR,
+        model_id="cnn",
+        metadata_filename=meta_filename,
+        num_states=n_states,
     )
-    meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    total_bytes = weights_path.stat().st_size + meta_path.stat().st_size
+    if total_bytes >= MAX_BUNDLE_BYTES:
+        raise RuntimeError(
+            f"Serialized CNN artifact set exceeds 1 MB limit: {total_bytes} bytes"
+        )
     print(f"\nSaved: {weights_path} and {meta_path}")
 
 

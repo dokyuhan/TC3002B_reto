@@ -7,7 +7,7 @@ services:
     environment:
       - MODEL_DIR=/app/models
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import json, sys, urllib.request; d = json.loads(urllib.request.urlopen('http://localhost:8000/health').read()); sys.exit(0 if d.get('model_loaded') is True else 1)"]
       interval: 10s
       timeout: 5s
       retries: 5

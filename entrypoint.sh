@@ -8,6 +8,7 @@ uvicorn src.api.main:app --host 127.0.0.1 --port 8000 &
 API_PID=$!
 
 python - <<'PY'
+import json
 import sys
 import time
 import urllib.request
@@ -19,11 +20,14 @@ while time.monotonic() < deadline:
     try:
         with urllib.request.urlopen(url, timeout=2.0) as response:
             if response.status == 200:
-                sys.exit(0)
+                payload = json.loads(response.read().decode("utf-8"))
+                if payload.get("model_loaded") is True:
+                    sys.exit(0)
     except Exception:
-        time.sleep(0.5)
+        pass
+    time.sleep(0.5)
 
-print("Timed out waiting for FastAPI /health readiness after 30s.", file=sys.stderr)
+print("Timed out waiting for FastAPI /health with model_loaded=true after 30s.", file=sys.stderr)
 sys.exit(1)
 PY
 

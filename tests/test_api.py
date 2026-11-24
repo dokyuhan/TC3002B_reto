@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -12,6 +11,7 @@ import pytest
 
 from src.api.main import app
 from src.models.baseline import TfidfCosineBaseline
+from src.models.registry import ensure_manifest_entry, write_model_metadata
 from src.preprocessing.normalizer import DEFAULT_AST_STATES, NUM_STATES
 
 JAVA_CODE_A = """
@@ -73,12 +73,12 @@ EXPECTED_PREDICT_KEYS = {
 
 @pytest.fixture()
 def synthetic_model_dir(tmp_path: Path) -> Path:
-    """Create random-weight CNN, tiny TF-IDF baseline, and metadata in tmp_path."""
+    """Create random weight CNN, tiny TF IDF baseline, and manifest metadata in tmp_path."""
     rng = np.random.default_rng(42)
     shapes = {
-        "conv1_w": (32, 3, 3, 3), "conv1_b": (32,),
-        "conv2_w": (64, 32, 3, 3), "conv2_b": (64,),
-        "fc1_w": (64, 64 * 4 * 4), "fc1_b": (64,),
+        "conv1_w": (16, 3, 3, 3), "conv1_b": (16,),
+        "conv2_w": (32, 16, 3, 3), "conv2_b": (32,),
+        "fc1_w": (64, 32 * 4 * 4), "fc1_b": (64,),
         "fc2_w": (1, 64), "fc2_b": (1,),
     }
     weights = {k: rng.normal(0.0, 0.1, size=s).astype(np.float32) for k, s in shapes.items()}
@@ -86,21 +86,33 @@ def synthetic_model_dir(tmp_path: Path) -> Path:
     tfidf_baseline = TfidfCosineBaseline(max_features=256)
     tfidf_baseline.fit([JAVA_CODE_A, JAVA_CODE_B, "class Helper { int x = 1; }"])
 
-    metadata = {
+    metadata: dict[str, object] = {
+        "kind": "cnn",
+        "display_name": "Pairwise CNN",
+        "artifact": "cnn_weights.npz",
         "model_version": "0.1.0-test",
         "threshold": 0.35,
         "threshold_low_fpr": 0.65,
-        "smoothing_alpha": 0.01,
+        "smoothing_alpha": 0.0,
         "num_states": NUM_STATES,
         "strip_boilerplate": True,
         "supported_languages": ["java"],
     }
 
-    np.savez(tmp_path / "cnn_weights.npz", **weights, n_states=np.int64(NUM_STATES), pool_size=np.int64(4))
+    np.savez(
+        tmp_path / "cnn_weights.npz",
+        **weights,
+        n_states=np.int64(NUM_STATES),
+        pool_size=np.int64(4),
+    )
     joblib.dump(tfidf_baseline, tmp_path / "tfidf_baseline.joblib")
-    (tmp_path / "model_metadata.json").write_text(
-        json.dumps(metadata),
-        encoding="utf-8",
+    write_model_metadata(tmp_path / "cnn_metadata.json", metadata)
+    ensure_manifest_entry(
+        tmp_path,
+        model_id="cnn",
+        metadata_filename="cnn_metadata.json",
+        num_states=NUM_STATES,
+        default_model="cnn",
     )
     return tmp_path
 
